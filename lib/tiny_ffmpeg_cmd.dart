@@ -13,4 +13,9 @@ class TinyFFmpegCMD{
   List<String> build(){
     return cmds;
   }
+
+  @override
+  String toString() {
+    return 'TinyFFmpegCMD{cmds: $cmds}';
+  }
 }
