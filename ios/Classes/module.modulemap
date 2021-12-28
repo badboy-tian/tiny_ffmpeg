@@ -1,0 +1,6 @@
+module CFFmpeg [system] {
+    module CMDUtil {
+        header "ffmpeg_utils.h"
+        export *
+    }
+}
