@@ -42,34 +42,34 @@
 
 #endif
 
-#include "libavformat/avformat.h"
-#include "libavdevice/avdevice.h"
-#include "libswresample/swresample.h"
-#include "libavutil/opt.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/parseutils.h"
-#include "libavutil/samplefmt.h"
-#include "libavutil/fifo.h"
-#include "libavutil/hwcontext.h"
-#include "libavutil/internal.h"
-#include "libavutil/intreadwrite.h"
-#include "libavutil/dict.h"
-#include "libavutil/display.h"
-#include "libavutil/mathematics.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/avstring.h"
-#include "libavutil/libm.h"
-#include "libavutil/imgutils.h"
-#include "libavutil/timestamp.h"
-#include "libavutil/bprint.h"
-#include "libavutil/time_t.h"
-#include "libavutil/threadmessage.h"
-#include "libavcodec/mathops.h"
-#include "libavformat/os_support.h"
+#include "include/libavformat/avformat.h"
+#include "include/libavdevice/avdevice.h"
+#include "include/libswresample/swresample.h"
+#include "include/libavutil/opt.h"
+#include "include/libavutil/channel_layout.h"
+#include "include/libavutil/parseutils.h"
+#include "include/libavutil/samplefmt.h"
+#include "include/libavutil/fifo.h"
+#include "include/libavutil/hwcontext.h"
+#include "include/libavutil/internal.h"
+#include "include/libavutil/intreadwrite.h"
+#include "include/libavutil/dict.h"
+#include "include/libavutil/display.h"
+#include "include/libavutil/mathematics.h"
+#include "include/libavutil/pixdesc.h"
+#include "include/libavutil/avstring.h"
+#include "include/libavutil/libm.h"
+#include "include/libavutil/imgutils.h"
+#include "include/libavutil/timestamp.h"
+#include "include/libavutil/bprint.h"
+#include "include/libavutil/time_t.h"
+#include "include/libavutil/threadmessage.h"
+#include "include/libavcodec/mathops.h"
+#include "include/libavformat/os_support.h"
 
-# include "libavfilter/avfilter.h"
-# include "libavfilter/buffersrc.h"
-# include "libavfilter/buffersink.h"
+# include "include/libavfilter/avfilter.h"
+# include "include/libavfilter/buffersrc.h"
+# include "include/libavfilter/buffersink.h"
 
 #if HAVE_SYS_RESOURCE_H
 
@@ -113,12 +113,12 @@
 #endif
 
 #include <time.h>
-#include "libavutil/time_t.h"
+#include "include/libavutil/time_t.h"
 
 #include "ffmpeg.h"
 #include "cmdutils.h"
 
-#include "libavutil/avassert.h"
+#include "include/libavutil/avassert.h"
 
 const char program_name[] = "ffmpeg";
 const int program_birth_year = 2000;

@@ -18,7 +18,8 @@
 
 #include <string.h>
 
-#include "libavutil/avstring.h"
+#include "include/libavutil/avstring.h"
+//#include "libavutil/avstring.h"
 
 #include "ffmpeg.h"
 

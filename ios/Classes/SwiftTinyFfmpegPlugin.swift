@@ -1,6 +1,6 @@
 import Flutter
 import UIKit
-import CFFmpeg
+//import CMDUtil
 
 //extern int Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_executeFFmpegCommand(int cmdLen, char* argv[], long totalTime);
 public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin {
@@ -37,23 +37,23 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin {
           }
         
           DispatchQueue.main.async(execute: {
-              _ = CFFmpeg.Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommand(Int32(argc), cargs, -1)
+              _ = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommand(Int32(argc), cargs, -1)
           })
       }else if(call.method == "showLog"){
           let showLog = call.arguments as! Bool
           if(showLog){
-              CFFmpeg.Java_com_i7play_tiny_ffmpeg_FFMpegUtils_showLog(1);
+              Java_com_i7play_tiny_ffmpeg_FFMpegUtils_showLog(1);
           }else{
-              CFFmpeg.Java_com_i7play_tiny_ffmpeg_FFMpegUtils_showLog(0);
+              Java_com_i7play_tiny_ffmpeg_FFMpegUtils_showLog(0);
           }
           
           result(showLog)
       }else if(call.method == "getMediaDuration"){
           let mediaPath = call.arguments as! String
-          let duration = CFFmpeg.Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getMediaDuration(mediaPath);
+          let duration = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getMediaDuration(mediaPath);
           result(duration)
       }else if(call.method == "cancelExecuteFFmpegCommand"){
-          CFFmpeg.Java_com_i7play_tiny_ffmpeg_FFMpegUtils_cancelExecuteFFmpegCommand();
+          Java_com_i7play_tiny_ffmpeg_FFMpegUtils_cancelExecuteFFmpegCommand();
           result(true)
       }
     

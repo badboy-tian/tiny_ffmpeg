@@ -22,22 +22,22 @@
 
 #include "ffmpeg.h"
 
-#include "libavfilter/avfilter.h"
-#include "libavfilter/buffersink.h"
-#include "libavfilter/buffersrc.h"
+#include "include/libavfilter/avfilter.h"
+#include "include/libavfilter/buffersink.h"
+#include "include/libavfilter/buffersrc.h"
 
-#include "libavresample/avresample.h"
+#include "include/libavresample/avresample.h"
 
-#include "libavutil/avassert.h"
-#include "libavutil/avstring.h"
-#include "libavutil/bprint.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/display.h"
-#include "libavutil/opt.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/pixfmt.h"
-#include "libavutil/imgutils.h"
-#include "libavutil/samplefmt.h"
+#include "include/libavutil/avassert.h"
+#include "include/libavutil/avstring.h"
+#include "include/libavutil/bprint.h"
+#include "include/libavutil/channel_layout.h"
+#include "include/libavutil/display.h"
+#include "include/libavutil/opt.h"
+#include "include/libavutil/pixdesc.h"
+#include "include/libavutil/pixfmt.h"
+#include "include/libavutil/imgutils.h"
+#include "include/libavutil/samplefmt.h"
 
 static const enum AVPixelFormat *get_compliance_unofficial_pix_fmts(enum AVCodecID codec_id,
                                                                     const enum AVPixelFormat default_formats[]) {

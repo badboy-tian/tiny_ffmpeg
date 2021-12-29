@@ -92,14 +92,14 @@
  *  avresample_free().
  */
 
-#include "libavutil/avutil.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/dict.h"
-#include "libavutil/frame.h"
-#include "libavutil/log.h"
-#include "libavutil/mathematics.h"
+#include "../libavutil/avutil.h"
+#include "../libavutil/channel_layout.h"
+#include "../libavutil/dict.h"
+#include "../libavutil/frame.h"
+#include "../libavutil/log.h"
+#include "../libavutil/mathematics.h"
 
-#include "libavresample/version.h"
+#include "../libavresample/version.h"
 
 #define AVRESAMPLE_MAX_CHANNELS 32
 

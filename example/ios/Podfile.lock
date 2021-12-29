@@ -27,7 +27,7 @@ SPEC CHECKSUMS:
   audioplayers: 455322b54050b30ea4b1af7cd9e9d105f74efa8c
   Flutter: 50d75fe2f02b26cc09d224853bb45737f8b3214a
   path_provider_ios: 7d7ce634493af4477d156294792024ec3485acd5
-  tiny_ffmpeg: f8c2399f2a087b02fd28bc59a27b61e45d38b888
+  tiny_ffmpeg: 5a93da208940fef4d8f34caf6700a903cee2d331
 
 PODFILE CHECKSUM: 2283d81173d04373ccdfcd38fcc5970b8caf66eb
 

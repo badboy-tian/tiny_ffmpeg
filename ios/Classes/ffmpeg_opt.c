@@ -26,23 +26,23 @@
 #include "ffmpeg.h"
 #include "cmdutils.h"
 
-#include "libavformat/avformat.h"
+#include "include/libavformat/avformat.h"
 
-#include "libavcodec/avcodec.h"
+#include "include/libavcodec/avcodec.h"
 
-#include "libavfilter/avfilter.h"
+#include "include/libavfilter/avfilter.h"
 
-#include "libavutil/avassert.h"
-#include "libavutil/avstring.h"
-#include "libavutil/avutil.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/intreadwrite.h"
-#include "libavutil/fifo.h"
-#include "libavutil/mathematics.h"
-#include "libavutil/opt.h"
-#include "libavutil/parseutils.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/pixfmt.h"
+#include "include/libavutil/avassert.h"
+#include "include/libavutil/avstring.h"
+#include "include/libavutil/avutil.h"
+#include "include/libavutil/channel_layout.h"
+#include "include/libavutil/intreadwrite.h"
+#include "include/libavutil/fifo.h"
+#include "include/libavutil/mathematics.h"
+#include "include/libavutil/opt.h"
+#include "include/libavutil/parseutils.h"
+#include "include/libavutil/pixdesc.h"
+#include "include/libavutil/pixfmt.h"
 
 #define DEFAULT_PASS_LOGFILENAME_PREFIX "ffmpeg2pass"
 
