@@ -1,6 +1,6 @@
 name: tiny_ffmpeg
 description: A new Flutter project.
-version: 0.0.2
+version: 0.0.1
 homepage: https://github.com/badboy-tian
 
 environment:
@@ -31,7 +31,7 @@ flutter:
         package: com.i7play.tiny_ffmpeg
         pluginClass: TinyFfmpegPlugin
       ios:
-        pluginClass: TinyFfmpegPlugin
+        pluginClass: SwiftTinyFfmpegPlugin
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'tiny_ffmpeg'
-  s.version          = '0.0.1'
+  s.version          = '0.0.2'
   s.summary          = 'A new Flutter project.'
   s.description      = <<-DESC
 A new Flutter project.
@@ -18,8 +18,9 @@ A new Flutter project.
   s.requires_arc = true
 
   # s.static_framework = true
-  s.ios.private_header_files = 'Classes/include/**/*'
-  s.ios.header_mappings_dir = 'Classes/include/'
+  s.ios.header_mappings_dir = 'Classes/include/**'
+  s.ios.private_header_files = 'Classes/include/**/*.h'
+  s.ios.public_header_files = 'Classes/ffmpeg_utils.h'
   s.ios.vendored_libraries = 'Classes/lib/*.a'
   s.ios.frameworks = 'CoreMedia', 'VideoToolBox', "AudioToolBox", "AVFoundation"
   s.dependency 'Flutter'
