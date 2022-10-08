@@ -3,12 +3,30 @@ import UIKit
 //import CMDUtil
 
 //extern int Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_executeFFmpegCommand(int cmdLen, char* argv[], long totalTime);
-public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin {
+public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
+    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        SwiftTinyFfmpegPlugin.events = events
+        return nil
+    }
+    
+    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        SwiftTinyFfmpegPlugin.events = nil
+        return nil
+    }
+    
     static var re: FlutterResult? = nil
+    var progressChannel: FlutterEventChannel? = nil
+    static var events: FlutterEventSink?
+    
+    convenience init(messenger: FlutterBinaryMessenger) {
+        self.init()
+        progressChannel = FlutterEventChannel(name: "tiny_ffmpeg_progress_event", binaryMessenger: messenger)
+        progressChannel?.setStreamHandler(self)
+    }
     
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "tiny_ffmpeg", binaryMessenger: registrar.messenger())
-    let instance = SwiftTinyFfmpegPlugin()
+    let instance = SwiftTinyFfmpegPlugin(messenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
     
@@ -65,10 +83,11 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin {
         map["type"] = "progress"
         map["code"] = 0
         map["message"] = progress
-        if (SwiftTinyFfmpegPlugin.re != nil) {
-            SwiftTinyFfmpegPlugin.re!(map)
-        }
         
+         if(SwiftTinyFfmpegPlugin.events != nil){
+             SwiftTinyFfmpegPlugin.events!(map)
+         }
+         
     }
     
     @_silgen_name("Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result")

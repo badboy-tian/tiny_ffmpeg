@@ -19,8 +19,8 @@ A new Flutter project.
 
   # s.static_framework = true
   s.ios.header_mappings_dir = 'Classes/include/**'
-  s.ios.private_header_files = 'Classes/include/**/*.h'
   s.ios.public_header_files = 'Classes/ffmpeg_utils.h'
+  s.ios.private_header_files = 'Classes/include/**/*.h'
   s.ios.vendored_libraries = 'Classes/lib/*.a'
   s.ios.frameworks = 'CoreMedia', 'VideoToolBox', "AudioToolBox", "AVFoundation"
   s.dependency 'Flutter'

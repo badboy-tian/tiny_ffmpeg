@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/tiny_ffmpeg.iml" filepath="$PROJECT_DIR$/tiny_ffmpeg.iml" />
+      <module fileurl="file://$PROJECT_DIR$/android/tiny_ffmpeg_android.iml" filepath="$PROJECT_DIR$/android/tiny_ffmpeg_android.iml" />
     </modules>
   </component>
 </project>
