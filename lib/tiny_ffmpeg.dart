@@ -36,6 +36,19 @@ class TinyFfmpeg {
     return await _channel.invokeMethod("getMediaDuration", path);
   }
 
+  static Future<TinyFfmpegResult> getThumbnailImage(String path, String outPath) {
+    TinyFFmpegCMD cmd = TinyFFmpegCMD();
+    cmd.add("-i");
+    cmd.add(path);
+    cmd.add("-ss");
+    cmd.add("00:00:01.000");
+    cmd.add("-vframes");
+    cmd.add("1");
+    cmd.add(outPath);
+
+    return executeFFmpegCommand(cmd);
+  }
+
   static Future<bool> cancelExecuteFFmpegCommand() async {
     return await _channel.invokeMethod("cancelExecuteFFmpegCommand");
   }
