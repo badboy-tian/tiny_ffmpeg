@@ -19,9 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <sys/time.h>
+
 #include <stdint.h>
-//#include <time.h>
 
 #include "ffmpeg.h"
 #include "cmdutils.h"
@@ -659,6 +658,7 @@ static int copy_metadata(char *outspec, char *inspec, AVFormatContext *oc, AVFor
 
     return 0;
 }
+
 
 static int opt_recording_timestamp(void *optctx, const char *opt, const char *arg) {
     OptionsContext *o = optctx;

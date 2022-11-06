@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <sys/time.h>
 
 extern int hasRegistered;
 typedef struct CallBackInfo {
