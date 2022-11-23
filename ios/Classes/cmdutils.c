@@ -133,12 +133,10 @@ void register_exit(void (*cb)(int ret))
     program_exit = cb;
 }
 
-void exit_program(int ret)
-{
+int exit_program(int ret) {
     if (program_exit)
         program_exit(ret);
-
-    exit(ret);
+    return ret;
 }
 
 double parse_number_or_die(const char *context, const char *numstr, int type,
@@ -342,7 +340,7 @@ static int write_option(void *optctx, const OptionDef *po, const char *opt,
         }
     }
     if (po->flags & OPT_EXIT)
-        exit_program(0);
+        return exit_program(0);
 
     return 0;
 }
@@ -401,8 +399,10 @@ void parse_options(void *optctx, int argc, char **argv, const OptionDef *options
             }
             opt++;
 
-            if ((ret = parse_option(optctx, opt, argv[optindex], options)) < 0)
+            if ((ret = parse_option(optctx, opt, argv[optindex], options)) < 0){
                 exit_program(1);
+                return;
+            }
             optindex += ret;
         } else {
             if (parse_arg_function)
@@ -712,8 +712,10 @@ static void init_parse_context(OptionParseContext *octx,
 
     octx->nb_groups = nb_groups;
     octx->groups    = av_mallocz_array(octx->nb_groups, sizeof(*octx->groups));
-    if (!octx->groups)
+    if (!octx->groups){
         exit_program(1);
+        return;
+    }
 
     for (i = 0; i < octx->nb_groups; i++)
         octx->groups[i].group_def = &groups[i];
@@ -939,6 +941,7 @@ int opt_loglevel(void *optctx, const char *opt, const char *arg)
         for (i = 0; i < FF_ARRAY_ELEMS(log_levels); i++)
             av_log(NULL, AV_LOG_FATAL, "\"%s\"\n", log_levels[i].name);
         exit_program(1);
+        return -1;
     }
 
 end:
@@ -947,7 +950,6 @@ end:
     return 0;
 }
 
-#include <sys/time.h>
 static void expand_filename_template(AVBPrint *bp, const char *template, struct tm *tt)
 {
     int c;
@@ -1010,6 +1012,7 @@ static int init_report(const char *env)
             if (*tail) {
                 av_log(NULL, AV_LOG_FATAL, "Invalid report file level\n");
                 exit_program(1);
+                return -1;
             }
         } else {
             av_log(NULL, AV_LOG_ERROR, "Unknown key '%s' in FFREPORT\n", key);
@@ -1018,7 +1021,7 @@ static int init_report(const char *env)
         av_free(key);
     }
 
-    av_bprint_init(&filename, 0, AV_BPRINT_SIZE_AUTOMATIC);
+    av_bprint_init(&filename, 0, 1);
     expand_filename_template(&filename,
                              av_x_if_null(filename_template, "%p-%t.log"), tm);
     av_free(filename_template);
@@ -1060,6 +1063,7 @@ int opt_max_alloc(void *optctx, const char *opt, const char *arg)
     if (*tail) {
         av_log(NULL, AV_LOG_FATAL, "Invalid max_alloc \"%s\".\n", arg);
         exit_program(1);
+        return -1;
     }
     av_max_alloc(max);
     return 0;
@@ -2111,9 +2115,14 @@ AVDictionary *filter_codec_opts(AVDictionary *opts, enum AVCodecID codec_id,
         /* check stream specification in opt name */
         if (p)
             switch (check_stream_specifier(s, st, p + 1)) {
-            case  1: *p = 0; break;
-            case  0:         continue;
-            default:         exit_program(1);
+                case 1:
+                    *p = 0;
+                    break;
+                case 0:
+                    continue;
+                default:
+                    exit_program(1);
+                    return NULL;
             }
 
         if (av_opt_find(&cc, t->key, NULL, flags, AV_OPT_SEARCH_FAKE_OBJ) ||
@@ -2164,6 +2173,7 @@ void *grow_array(void *array, int elem_size, int *size, int new_size)
         if (!tmp) {
             av_log(NULL, AV_LOG_ERROR, "Could not alloc buffer.\n");
             exit_program(1);
+            return NULL;
         }
         memset(tmp + *size*elem_size, 0, (new_size-*size) * elem_size);
         *size = new_size;
