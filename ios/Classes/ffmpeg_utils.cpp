@@ -3,8 +3,8 @@
 #include <ctime>
 
 extern "C" {
-#include "ffmpeg.h"
-#include "ffmpeg_cmd.h"
+#include "include/ffmpeg.h"
+#include "include/ffmpeg_cmd.h"
 #include "ffmpeg_utils.h"
 }
 

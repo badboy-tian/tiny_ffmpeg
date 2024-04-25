@@ -21,7 +21,7 @@
 #include "include/libavutil/avstring.h"
 //#include "libavutil/avstring.h"
 
-#include "ffmpeg.h"
+#include "include/ffmpeg.h"
 
 static int nb_hw_devices;
 static HWDevice **hw_devices;

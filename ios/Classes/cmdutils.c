@@ -54,7 +54,7 @@
 #include "cpu.h"
 #include "ffversion.h"
 #include "version.h"
-#include "cmdutils.h"
+#include "include/cmdutils.h"
 #if CONFIG_NETWORK
 #include "network.h"
 #endif
