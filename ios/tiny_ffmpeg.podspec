@@ -19,7 +19,8 @@ A new Flutter project.
 
   # s.static_framework = true
   #s.ios.header_mappings_dir = 'Classes/**/*'
-  s.ios.public_header_files = 'Classes/ffmpeg_utils.h'
+  s.public_header_files = 'Classes/ffmpeg_utils.h'
+  s.preserve_paths = 'Classes/**/*.h'
   s.ios.vendored_libraries = 'Classes/lib/*.a'
   s.ios.frameworks = 'CoreMedia', 'VideoToolBox', "AudioToolBox", "AVFoundation"
   s.dependency 'Flutter'
@@ -30,4 +31,8 @@ A new Flutter project.
   valid_archs = ['arm64', 'i386']
 
   s.swift_version = '5.0'
+
+  s.xcconfig = {
+    'HEADER_SEARCH_PATHS' => '${PODS_ROOT}/tiny_ffmpeg/Classes'
+  }
 end
