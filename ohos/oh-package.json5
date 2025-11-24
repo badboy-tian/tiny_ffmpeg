@@ -1,0 +1,13 @@
+{
+  "name": "tiny_ffmpeg",
+  "version": "1.0.0",
+  "description": "Please describe the basic information.",
+  "main": "index.ets",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "libffmpegutils.so": "file:src/main/cpp/types/ffmpegutils",
+    "@ohos/aki": "^1.2.20"
+  },
+  "modelVersion": "5"
+}

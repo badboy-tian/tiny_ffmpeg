@@ -4,7 +4,7 @@ version: 0.0.5
 homepage: https://github.com/badboy-tian
 
 environment:
-  sdk: ">=2.15.0 <3.0.0"
+  sdk: ">=2.15.0 <4.0.0"
   flutter: ">=1.20.0"
 
 dependencies:
@@ -32,6 +32,8 @@ flutter:
         pluginClass: TinyFfmpegPlugin
       ios:
         pluginClass: SwiftTinyFfmpegPlugin
+      ohos:
+        pluginClass: TinyFfmpegPlugin
 
   # To add assets to your plugin package, add an assets section, like this:
   # assets:

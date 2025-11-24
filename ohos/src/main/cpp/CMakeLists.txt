@@ -1,0 +1,49 @@
+# the minimum version of CMake.
+cmake_minimum_required(VERSION 3.5.0)
+project(voicechanger)
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-int-conversion -Wl,-Bsymbolic")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-int-conversion -Wl,-Bsymbolic")
+
+set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(DEFINED PACKAGE_FIND_FILE)
+    include(${PACKAGE_FIND_FILE})
+endif()
+
+set(AKI_ROOT_PATH ${NATIVERENDER_ROOT_PATH}/../../../oh_modules/@ohos/aki) # 设置AKI根路径
+set(CMAKE_MODULE_PATH ${AKI_ROOT_PATH})
+find_package(Aki REQUIRED)
+
+file(GLOB FFMPEG_DIR ${NATIVERENDER_ROOT_PATH}/*.c)
+
+include_directories(${NATIVERENDER_ROOT_PATH} ${NATIVERENDER_ROOT_PATH}/include)
+
+add_library(ffmpegutils SHARED napi_init.cpp ${FFMPEG_DIR})
+target_link_libraries(ffmpegutils PUBLIC libace_napi.z.so)
+target_link_libraries(ffmpegutils PUBLIC libhilog_ndk.z.so)
+
+#将三方库加入工程中
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavformat.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavcodec.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavfilter.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavutil.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libswresample.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libswscale.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavdevice.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavresample.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libpostproc.a)
+
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/zlib/${OHOS_ARCH}/lib/libz.a)
+
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/lib/libmp3lame.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/fdk-aac/${OHOS_ARCH}/lib/libfdk-aac.a)
+target_link_libraries(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/lib/libx264.a)
+
+#将三方库的头文件加入工程中
+target_include_directories(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/include)
+target_include_directories(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/include)
+target_include_directories(ffmpegutils PRIVATE ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/include)
+
+target_link_libraries(ffmpegutils PUBLIC Aki::libjsbind)

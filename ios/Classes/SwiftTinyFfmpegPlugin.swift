@@ -54,9 +54,9 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
               cargs[i] = pointer
           }
         
-          DispatchQueue.main.async(execute: {
+        DispatchQueue.global(qos: .userInitiated).async {
               _ = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommand(Int32(argc), cargs, -1)
-          })
+          }
       }else if(call.method == "showLog"){
           let showLog = call.arguments as! Bool
           if(showLog){
@@ -85,7 +85,9 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
         map["message"] = progress
         
          if(SwiftTinyFfmpegPlugin.events != nil){
-             SwiftTinyFfmpegPlugin.events!(map)
+             DispatchQueue.main.async {
+                 SwiftTinyFfmpegPlugin.events!(map)
+             }
          }
          
     }
@@ -99,7 +101,9 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             map["code"] = 0
             map["message"] = "success"
             if (SwiftTinyFfmpegPlugin.re != nil) {
-                SwiftTinyFfmpegPlugin.re!(map)
+                DispatchQueue.main.async {
+                    SwiftTinyFfmpegPlugin.re!(map)
+                }
             }
         }else{
             var map = Dictionary<String, Any>()
@@ -107,7 +111,9 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
             map["code"] = 0
             map["message"] = msg
             if (SwiftTinyFfmpegPlugin.re != nil) {
-                SwiftTinyFfmpegPlugin.re!(map)
+                DispatchQueue.main.async {
+                    SwiftTinyFfmpegPlugin.re!(map)
+                }
             }
         }
     }

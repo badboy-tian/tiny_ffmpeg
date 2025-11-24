@@ -1,6 +1,7 @@
 package com.i7play.tiny_ffmpeg
 
-import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.NonNull
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -10,21 +11,18 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.EventChannel.EventSink
-import io.reactivex.BackpressureStrategy
-import io.reactivex.Flowable
-import io.reactivex.FlowableEmitter
-import io.reactivex.FlowableOnSubscribe
-import io.reactivex.android.schedulers.AndroidSchedulers
-import io.reactivex.disposables.Disposable
-import io.reactivex.schedulers.Schedulers
-
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /** TinyFfmpegPlugin */
 class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private var eventSink: EventSink? = null
-    var dispose: Disposable ?= null
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var future: Future<*>? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg")
@@ -51,7 +49,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                     return
                 }
 
-                dispose = Flowable.create(FlowableOnSubscribe<HashMap<String, Any>> { emitter ->
+                future = executor.submit {
                     FFMpegUtils.executeFFmpegCommand(argc, argv.toTypedArray(), object : FFMpegUtils.OnActionListener {
                         override fun progress(progress: Float) {
                             val map = hashMapOf<String, Any>()
@@ -59,7 +57,9 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                             map["code"] = 0
                             map["message"] = progress
 
-                            emitter.onNext(map)
+                            mainHandler.post {
+                                eventSink?.success(map)
+                            }
                         }
 
                         override fun fail(code: Int, msg: String?) {
@@ -67,7 +67,10 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                             map["type"] = "result"
                             map["code"] = -1
                             map["message"] = msg.toString()
-                            emitter.onNext(map)
+                            
+                            mainHandler.post {
+                                result.success(map)
+                            }
                         }
 
                         override fun success() {
@@ -75,23 +78,13 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                             map["type"] = "result"
                             map["code"] = 0
                             map["message"] = "success"
-                            emitter.onNext(map)
+                            
+                            mainHandler.post {
+                                result.success(map)
+                            }
                         }
                     })
-                }, BackpressureStrategy.BUFFER).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe ({ map->
-                    val type = map["type"].toString()
-                    if(type == "progress"){
-                        eventSink?.success(map)
-                    }else{
-                        result.success(map)
-                    }
-                }, {error->
-                    val map = hashMapOf<String, Any>()
-                    map["type"] = "result"
-                    map["code"] = -1
-                    map["message"] = error.message.toString()
-                    result.success(map)
-                })
+                }
             }
             "showLog" -> {
                 val isShowLog = call.arguments as Boolean
@@ -103,9 +96,9 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 result.success(FFMpegUtils.getMediaDuration(mediaPath))
             }
             "cancelExecuteFFmpegCommand" -> {
-                dispose?.dispose()
-                dispose = null
-                FFMpegUtils.cancelExecuteFFmpegCommand();
+                future?.cancel(true)
+                future = null
+                FFMpegUtils.cancelExecuteFFmpegCommand()
                 result.success(true)
             }
             else -> {
@@ -118,8 +111,9 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
-        dispose?.dispose()
-        dispose = null
+        future?.cancel(true)
+        future = null
+        executor.shutdown()
     }
 
     override fun onListen(arguments: Any?, events: EventSink?) {
@@ -128,7 +122,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
 
     override fun onCancel(arguments: Any?) {
         eventSink = null
-        dispose?.dispose()
-        dispose = null
+        future?.cancel(true)
+        future = null
     }
 }

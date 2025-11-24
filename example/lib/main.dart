@@ -77,10 +77,10 @@ class _MyAppState extends State<MyApp> {
     args.add(outPath);
 
     TinyFfmpegResult result = await TinyFfmpeg.executeFFmpegCommand(args);
-    print(result);
+    debugPrint("$result");
 
     AudioPlayer _player = AudioPlayer();
-    _player.play(outPath, isLocal: true);
+    _player.play(DeviceFileSource(outPath));
   }
 
   Future<void> checkCopy(String path, String name) async {

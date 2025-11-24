@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "tiny_ffmpeg",
+    "type": "har",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ]
+  }
+}
