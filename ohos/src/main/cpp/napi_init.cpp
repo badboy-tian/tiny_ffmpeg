@@ -17,6 +17,7 @@ extern "C" {
 #include "libavfilter/avfilter.h"
 #include "libavformat/avformat.h"
 #include "libavutil/log.h"
+#include "libavutil/error.h"
 // int exe_ffmpeg_cmd(int argc, char **argv,
 //                    int64_t handle, void (*progressCallBack)(int64_t, int,
 //                    float), int64_t totalTime);
@@ -118,7 +119,8 @@ void appendSessionErrorMessage(int64_t sessionId, const char* message) {
   
   std::lock_guard<std::mutex> lock(sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+    // 即使 session 被销毁，也要允许追加错误信息（通过 sessionId 匹配）
+    if (sessions[i].sessionId == sessionId) {
       std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
       
       int remaining = MAX_ERROR_BUFFER_SIZE - sessions[i].errorBufferLen - 1;
@@ -154,8 +156,12 @@ int cancelFFmpegCommandBySession(int64_t sessionId) {
 std::string getSessionErrorMessage(int64_t sessionId) {
   std::lock_guard<std::mutex> lock(sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
-      return std::string(sessions[i].errorBuffer);
+    // 即使 session 被销毁，也要尝试返回错误信息（通过 sessionId 匹配）
+    if (sessions[i].sessionId == sessionId) {
+      std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
+      if (sessions[i].errorBufferLen > 0 && strlen(sessions[i].errorBuffer) > 0) {
+        return std::string(sessions[i].errorBuffer);
+      }
     }
   }
   return "";
@@ -164,7 +170,8 @@ std::string getSessionErrorMessage(int64_t sessionId) {
 void destroyFFmpegSession(int64_t sessionId) {
   std::lock_guard<std::mutex> lock(sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+    if (sessions[i].sessionId == sessionId) {
+      // 只清除 inUse 标志，保留错误缓冲区以便后续查询
       sessions[i].inUse = 0;
       break;
     }
@@ -184,27 +191,52 @@ void setCurrentExecutingSessionId(int64_t sessionId) {
 
 void log_call_back_with_callback(void *ptr, int level, const char *fmt,
                                  va_list vl) {
-  char buffer[8190];
-  vsnprintf(buffer, sizeof(buffer), fmt, vl);
-  
-  // 收集 ERROR 和 FATAL 级别的日志到Session错误缓冲区
-  // 同时也收集 WARNING 级别的日志，因为很多错误信息是以 WARNING 级别输出的
-  if (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING) {
-    if (g_currentCallbackInfo != nullptr && g_currentCallbackInfo->sessionId != 0) {
-      // 添加换行符，确保错误信息格式正确
-      char line[48190 + 2];
-      snprintf(line, sizeof(line), "%s\n", buffer);
-      appendSessionErrorMessage(g_currentCallbackInfo->sessionId, line);
-    }
-  }
-  
   // 使用 av_log_format_line 格式化日志用于输出和回调
   static int print_prefix = 1;
-  char line[1024];
+  char line[8192];
   va_list vl_copy;
   va_copy(vl_copy, vl);
   av_log_format_line(ptr, level, fmt, vl_copy, line, sizeof(line), &print_prefix);
   va_end(vl_copy);
+  
+  // 收集 ERROR 和 FATAL 级别的日志到Session错误缓冲区
+  // 同时也收集 WARNING 级别的日志，因为很多错误信息是以 WARNING 级别输出的
+  // 另外收集包含错误关键词的 INFO 级别日志（如 "Invalid argument", "not a suitable" 等）
+  bool shouldCollect = (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING);
+  
+  // 对于 INFO 级别及以下的日志，检查是否包含错误关键词
+  if (!shouldCollect && level <= AV_LOG_INFO) {
+    const char* errorKeywords[] = {
+      "Invalid argument",
+      "not a suitable",
+      "Conversion failed",
+      "pipe::",
+      "[NULL @",
+      "failed",
+      "error",
+      "Error",
+      "ERROR",
+      "cannot",
+      "Cannot",
+      "Unable",
+      "unable"
+    };
+    for (size_t i = 0; i < sizeof(errorKeywords) / sizeof(errorKeywords[0]); i++) {
+      if (strstr(line, errorKeywords[i]) != nullptr) {
+        shouldCollect = true;
+        break;
+      }
+    }
+  }
+  
+  if (shouldCollect) {
+    if (g_currentCallbackInfo != nullptr && g_currentCallbackInfo->sessionId != 0) {
+      // 添加换行符，确保错误信息格式正确
+      char errorLine[8194];
+      snprintf(errorLine, sizeof(errorLine), "%s\n", line);
+      appendSessionErrorMessage(g_currentCallbackInfo->sessionId, errorLine);
+    }
+  }
 
   // 如果设置了 log callback，调用它（使用格式化后的 line）
   if (g_currentCallbackInfo != nullptr &&
@@ -281,6 +313,28 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid, int cmd
   int ret = exe_ffmpeg_cmd_with_session(sessionId, cmdLen, argv1);
 
   setCurrentExecutingSessionId(0);
+
+  // 如果返回码非零但错误缓冲区为空，尝试添加一些有用的错误信息
+  if (ret != 0) {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+      if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+        std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
+        if (sessions[i].errorBufferLen == 0 || strlen(sessions[i].errorBuffer) == 0) {
+          // 错误缓冲区为空，添加返回码的错误描述
+          char errMsg[512] = {0};
+          av_strerror(ret, errMsg, sizeof(errMsg));
+          char defaultError[1024] = {0};
+          snprintf(defaultError, sizeof(defaultError), 
+                   "FFmpeg execution failed with return code: %d\n"
+                   "Error description: %s\n"
+                   "Note: No detailed error log was captured.\n", ret, errMsg);
+          appendSessionErrorMessage(sessionId, defaultError);
+        }
+        break;
+      }
+    }
+  }
 
   // 清理全局变量（总是清理，因为我们总是设置了 g_currentCallbackInfo）
   g_currentCallbackInfo = nullptr;

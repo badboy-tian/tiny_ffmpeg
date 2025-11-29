@@ -4972,6 +4972,7 @@ static int transcode() {
     if (ret < 0 && ret != AVERROR_EOF) {
       av_log(NULL, AV_LOG_ERROR, "Error while filtering: %s\n",
              av_err2str(ret));
+      main_return_code = 1;
       break;
     }
 
@@ -5001,6 +5002,7 @@ static int transcode() {
              "Nothing was written into output file %d (%s), because "
              "at least one of its streams received no packets.\n",
              i, os->url);
+      main_return_code = 1;
       continue;
     }
     if ((ret = av_write_trailer(os)) < 0) {
@@ -5042,7 +5044,13 @@ static int transcode() {
   hw_device_free_all();
 
   /* finished ! */
-  ret = 0;
+  // Only set ret = 0 if main_return_code is also 0 (success)
+  // Otherwise, preserve any error codes that may have been set
+  if (main_return_code == 0) {
+    ret = 0;
+  } else {
+    ret = main_return_code;
+  }
 
 fail:
 #if HAVE_THREADS
