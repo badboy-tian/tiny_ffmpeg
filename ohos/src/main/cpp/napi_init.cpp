@@ -1,13 +1,16 @@
 #include <aki/jsbind.h>
 #include <cstdio>
 #include <vector>
+#include <map>
+#include <mutex>
+#include <string>
 
 #include "hilog/log.h"
 
 #undef LOG_DOMAIN
 #undef LOG_TAG
 #define LOG_DOMAIN 0x3200 // 全局domain宏，标识业务领域
-#define LOG_TAG "xxoo"    // 全局tag宏，标识模块日志tag
+#define LOG_TAG "tiny_ffmpeg"    // 全局tag宏，标识模块日志tag
 
 extern "C" {
 #include "ffmpeg.h"
@@ -17,6 +20,12 @@ extern "C" {
 // int exe_ffmpeg_cmd(int argc, char **argv,
 //                    int64_t handle, void (*progressCallBack)(int64_t, int,
 //                    float), int64_t totalTime);
+
+// 声明 C 函数（在 ffmpeg.c 中定义）
+int64_t get_ffmpeg_current_session_id(void);
+void set_ffmpeg_current_session_id(int64_t sessionId);
+void cancel_ffmpeg_cmd(void);
+int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv);
 }
 
 char **vector_to_argv(const std::vector<std::string> &args) {
@@ -41,36 +50,240 @@ char **vector_to_argv(const std::vector<std::string> &args) {
 
 typedef struct CallBackInfo {
   const aki::JSFunction *onFFmpegProgress;
+  const aki::JSFunction *onFFmpegLog;
+  const aki::JSFunction *onFFmpegProgressMessage;
+  bool hasLogCallback;
+  bool hasProgressCallback;
+  int64_t sessionId;
 } CallBackInfo;
 
 #include <fstream>
 #include <sstream>
-#include <string>
 
-void log_call_back(void *ptr, int level, const char *fmt, va_list vl) {
-  static int print_prefix = 1;
-  static char prev[1024];
-  char line[1024];
-  av_log_format_line(ptr, level, fmt, vl, line, sizeof(line), &print_prefix);
-  strcpy(prev, line);
-  OH_LOG_ERROR(LOG_APP, "========> %{public}s", line);
+// 全局变量存储当前的 CallBackInfo
+static CallBackInfo *g_currentCallbackInfo = nullptr;
+
+// 全局变量控制是否输出日志到控制台（默认开启）
+static bool g_logEnabled = false;
+
+// Session 管理（完整版本，与其他平台同步）
+#define MAX_SESSIONS 64
+#define MAX_ERROR_BUFFER_SIZE 8192
+
+typedef struct {
+  int64_t sessionId;
+  volatile int cancelled;
+  char errorBuffer[MAX_ERROR_BUFFER_SIZE];
+  int errorBufferLen;
+  std::mutex errorMutex;
+  int inUse;
+} SessionContext;
+
+static SessionContext sessions[MAX_SESSIONS];
+static std::mutex sessionsMutex;
+static int64_t nextSessionId = 1;
+static int64_t currentExecutingSessionId = 0;
+
+int64_t createFFmpegSession() {
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  int64_t sessionId = nextSessionId++;
+  
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (!sessions[i].inUse) {
+      sessions[i].sessionId = sessionId;
+      sessions[i].cancelled = 0;
+      sessions[i].errorBuffer[0] = '\0';
+      sessions[i].errorBufferLen = 0;
+      sessions[i].inUse = 1;
+      return sessionId;
+    }
+  }
+  return -1;
 }
 
-void showLog(bool show) {
-  if (show) {
-    av_log_set_callback(log_call_back);
+// 需要被 C 代码调用的函数，使用 extern "C"
+extern "C" {
+int isSessionCancelled(int64_t sessionId) {
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+      return sessions[i].cancelled;
+    }
+  }
+  return 0;
+}
+
+void appendSessionErrorMessage(int64_t sessionId, const char* message) {
+  if (message == nullptr || strlen(message) == 0) return;
+  
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+      std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
+      
+      int remaining = MAX_ERROR_BUFFER_SIZE - sessions[i].errorBufferLen - 1;
+      if (remaining > 0) {
+        int msgLen = (int)strlen(message);
+        int toCopy = remaining < msgLen ? remaining : msgLen;
+        strncat(sessions[i].errorBuffer, message, toCopy);
+        sessions[i].errorBufferLen += toCopy;
+        sessions[i].errorBuffer[sessions[i].errorBufferLen] = '\0';
+      }
+      break;
+    }
+  }
+}
+} // extern "C"
+
+int cancelFFmpegCommandBySession(int64_t sessionId) {
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+      sessions[i].cancelled = 1;
+      // 如果这是当前正在执行的 session，也触发全局取消
+      if (get_ffmpeg_current_session_id() == sessionId) {
+        cancel_ffmpeg_cmd();
+      }
+      return 0;
+    }
+  }
+  return -1;
+}
+
+// 注意：JSBind 需要返回 std::string，aki 会自动转换
+std::string getSessionErrorMessage(int64_t sessionId) {
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+      return std::string(sessions[i].errorBuffer);
+    }
+  }
+  return "";
+}
+
+void destroyFFmpegSession(int64_t sessionId) {
+  std::lock_guard<std::mutex> lock(sessionsMutex);
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+      sessions[i].inUse = 0;
+      break;
+    }
   }
 }
 
-int executeFFmpegCommandAPP(std::string uuid, int cmdLen,
-                            std::vector<std::string> argv) {
+int64_t getCurrentExecutingSessionId(void) {
+  // 从 ffmpeg.c 获取当前执行的 sessionId
+  return get_ffmpeg_current_session_id();
+}
+
+void setCurrentExecutingSessionId(int64_t sessionId) {
+  currentExecutingSessionId = sessionId;
+  // 同时设置 ffmpeg.c 中的 sessionId
+  set_ffmpeg_current_session_id(sessionId);
+}
+
+void log_call_back_with_callback(void *ptr, int level, const char *fmt,
+                                 va_list vl) {
+  char buffer[8190];
+  vsnprintf(buffer, sizeof(buffer), fmt, vl);
+  
+  // 收集 ERROR 和 FATAL 级别的日志到Session错误缓冲区
+  // 同时也收集 WARNING 级别的日志，因为很多错误信息是以 WARNING 级别输出的
+  if (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING) {
+    if (g_currentCallbackInfo != nullptr && g_currentCallbackInfo->sessionId != 0) {
+      // 添加换行符，确保错误信息格式正确
+      char line[48190 + 2];
+      snprintf(line, sizeof(line), "%s\n", buffer);
+      appendSessionErrorMessage(g_currentCallbackInfo->sessionId, line);
+    }
+  }
+  
+  // 使用 av_log_format_line 格式化日志用于输出和回调
+  static int print_prefix = 1;
+  char line[1024];
+  va_list vl_copy;
+  va_copy(vl_copy, vl);
+  av_log_format_line(ptr, level, fmt, vl_copy, line, sizeof(line), &print_prefix);
+  va_end(vl_copy);
+
+  // 如果设置了 log callback，调用它（使用格式化后的 line）
+  if (g_currentCallbackInfo != nullptr &&
+      g_currentCallbackInfo->hasLogCallback &&
+      g_currentCallbackInfo->onFFmpegLog != nullptr) {
+    g_currentCallbackInfo->onFFmpegLog->Invoke<void>(level, std::string(line));
+  }
+
+  // 检查是否是进度信息（FFmpeg 的进度输出格式：size=... time=... bitrate=...
+  // speed=...）
+  if (g_currentCallbackInfo != nullptr &&
+      g_currentCallbackInfo->hasProgressCallback &&
+      g_currentCallbackInfo->onFFmpegProgressMessage != nullptr) {
+    std::string logLine(line);
+    // 检查是否包含进度信息的关键字
+    if (logLine.find("size=") != std::string::npos &&
+        (logLine.find("time=") != std::string::npos ||
+         logLine.find("bitrate=") != std::string::npos)) {
+      // 提取进度信息
+      std::string progressMsg = logLine;
+      // 清理换行符和多余空格
+      while (!progressMsg.empty() &&
+             (progressMsg.back() == '\n' || progressMsg.back() == '\r' ||
+              progressMsg.back() == ' ')) {
+        progressMsg.pop_back();
+      }
+      if (!progressMsg.empty()) {
+        g_currentCallbackInfo->onFFmpegProgressMessage->Invoke<void>(
+            progressMsg);
+      }
+    }
+  }
+
+  // 仍然输出到日志（根据 g_logEnabled 开关控制）
+  if (g_logEnabled) {
+    OH_LOG_ERROR(LOG_APP, "========> %{public}s", line);
+  }
+}
+
+// 新增：通过 sessionId 执行命令
+int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid, int cmdLen,
+                                    std::vector<std::string> argv) {
   char **argv1 = vector_to_argv(argv);
+
+  setCurrentExecutingSessionId(sessionId);
+
+  // 清空该session的错误缓冲区和取消标志
+  {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+      if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+        std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
+        sessions[i].errorBuffer[0] = '\0';
+        sessions[i].errorBufferLen = 0;
+        sessions[i].cancelled = 0;
+        break;
+      }
+    }
+  }
 
   CallBackInfo onActionListener;
   onActionListener.onFFmpegProgress =
       aki::JSBind::GetJSFunction(uuid + "_onFFmpegProgress");
+  onActionListener.hasLogCallback = false;
+  onActionListener.hasProgressCallback = false;
+  onActionListener.sessionId = sessionId;
+  onActionListener.onFFmpegLog = nullptr;
+  onActionListener.onFFmpegProgressMessage = nullptr;
+  
+  // 总是设置 g_currentCallbackInfo 以便收集错误信息
+  g_currentCallbackInfo = &onActionListener;
+  av_log_set_callback(log_call_back_with_callback);
 
-  int ret = exe_ffmpeg_cmd(cmdLen, argv1);
+  int ret = exe_ffmpeg_cmd_with_session(sessionId, cmdLen, argv1);
+
+  setCurrentExecutingSessionId(0);
+
+  // 清理全局变量（总是清理，因为我们总是设置了 g_currentCallbackInfo）
+  g_currentCallbackInfo = nullptr;
 
   for (int i = 0; i < cmdLen; ++i) {
     free(argv1[i]);
@@ -78,10 +291,18 @@ int executeFFmpegCommandAPP(std::string uuid, int cmdLen,
   return ret;
 }
 
+// 设置日志输出开关
+void setLogEnabled(bool enabled) {
+  g_logEnabled = enabled;
+}
+
 JSBIND_ADDON(ffmpegutils)
 
 JSBIND_GLOBAL() {
-  JSBIND_PFUNCTION(executeFFmpegCommandAPP);
-  JSBIND_FUNCTION(showLog);
-  JSBIND_FUNCTION(cancel_ffmpeg_cmd, "cancelFFmpegCommand");
+  JSBIND_PFUNCTION(executeFFmpegCommandWithSession);
+  JSBIND_FUNCTION(createFFmpegSession);
+  JSBIND_FUNCTION(cancelFFmpegCommandBySession);
+  JSBIND_FUNCTION(getSessionErrorMessage);
+  JSBIND_FUNCTION(destroyFFmpegSession);
+  JSBIND_FUNCTION(setLogEnabled);
 }

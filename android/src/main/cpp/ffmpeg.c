@@ -166,6 +166,14 @@ OutputFile **output_files = NULL;
 int nb_output_files = 0;
 int request_cancel_exe_ffmpeg_cmd = 0;
 
+// Session 支持：当前执行的 sessionId（在 transcode 中使用）
+static int64_t current_ffmpeg_session_id = 0;
+
+// 声明 Session 管理函数（在 ffmpeg_cmd.c 中实现）
+extern int isSessionCancelled(int64_t sessionId);
+extern void appendSessionErrorMessage(int64_t sessionId, const char* message);
+extern int64_t getCurrentExecutingSessionId(void);
+
 FilterGraph **filtergraphs;
 int nb_filtergraphs;
 
@@ -4761,6 +4769,14 @@ static int transcode(int64_t callBackHandle, void (*progressCallBack)(int64_t, i
 #endif
 
     while (!received_sigterm) {
+        // 检查 Session 取消（优先）
+        int64_t sessionId = current_ffmpeg_session_id;
+        if (sessionId != 0 && isSessionCancelled(sessionId)) {
+            av_log(NULL, AV_LOG_WARNING, "Session %lld cancelled\n", sessionId);
+            appendSessionErrorMessage(sessionId, "FFmpeg command was cancelled by user\n");
+            break;
+        }
+        // 保留旧逻辑（向后兼容）
         if (request_cancel_exe_ffmpeg_cmd) {
             av_log(NULL, AV_LOG_WARNING, "request_cancel_exe_ffmpeg_cmd\n");
             break;
@@ -4922,12 +4938,13 @@ static int64_t getmaxrss(void) {
 static void log_callback_null(void *ptr, int level, const char *fmt, va_list vl) {
 }
 
-int exe_ffmpeg_cmd(int argc, char **argv,
+int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv,
                    int64_t handle, void (*progressCallBack)(int64_t, int, float),
                    int64_t totalTime) {
     int i, ret;
     int64_t ti;
 
+    current_ffmpeg_session_id = sessionId;
     request_cancel_exe_ffmpeg_cmd = 0;
     init_dynload();
 
@@ -4983,19 +5000,35 @@ int exe_ffmpeg_cmd(int argc, char **argv,
     }
     ti = getutime();
     current_time = (int) ti;
-    if (transcode(handle, progressCallBack, totalTime) < 0)
+    if (transcode(handle, progressCallBack, totalTime) < 0) {
+        if (sessionId != 0) {
+            char errMsg[256];
+            snprintf(errMsg, sizeof(errMsg), "FFmpeg execution failed with code: %d\n", main_return_code);
+            appendSessionErrorMessage(sessionId, errMsg);
+        }
+        current_ffmpeg_session_id = 0;
         return exit_program(1);
+    }
     ti = getutime() - ti;
     if (do_benchmark) {
         av_log(NULL, AV_LOG_INFO, "bench: utime=%0.3fs\n", ti / 1000000.0);
     }
     av_log(NULL, AV_LOG_DEBUG, "%"PRIu64" frames successfully decoded, %"PRIu64" decoding errors\n",
            decode_error_stat[0], decode_error_stat[1]);
-    if ((decode_error_stat[0] + decode_error_stat[1]) * max_error_rate < decode_error_stat[1])
+    if ((decode_error_stat[0] + decode_error_stat[1]) * max_error_rate < decode_error_stat[1]) {
+        current_ffmpeg_session_id = 0;
         return exit_program(69);
+    }
 
+    current_ffmpeg_session_id = 0;
     exit_program(received_nb_signals ? 255 : main_return_code);
     return main_return_code;
+}
+
+int exe_ffmpeg_cmd(int argc, char **argv,
+                   int64_t handle, void (*progressCallBack)(int64_t, int, float),
+                   int64_t totalTime) {
+    return exe_ffmpeg_cmd_with_session(0, argc, argv, handle, progressCallBack, totalTime);
 }
 
 int cancel_exe_ffmpeg_cmd() {

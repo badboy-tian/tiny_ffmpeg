@@ -683,6 +683,7 @@ int hw_device_setup_for_encode(OutputStream *ost);
 
 int hwaccel_decode_init(AVCodecContext *avctx);
 int exe_ffmpeg_cmd(int argc, char **argv);
+int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv);
 void cancel_ffmpeg_cmd(void);
 
 static int main_return_code = 0;

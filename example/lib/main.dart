@@ -4,7 +4,6 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:tiny_ffmpeg/tiny_ffmpeg.dart';
 import 'package:tiny_ffmpeg/tiny_ffmpeg_cmd.dart';
@@ -21,34 +20,17 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  String _platformVersion = 'Unknown';
   StreamSubscription? subscription;
+  TinyFfmpegSession? _currentSession;
 
   @override
   void initState() {
     super.initState();
-    initPlatformState();
+    //initPlatformState();
   }
 
   // Platform messages are asynchronous, so we initialize in an async method.
   Future<void> initPlatformState() async {
-    String platformVersion;
-    try {
-      platformVersion = await TinyFfmpeg.platformVersion ?? 'Unknown platform version';
-    } on PlatformException {
-      platformVersion = 'Failed to get platform version.';
-    }
-
-    if (!mounted) return;
-
-    setState(() {
-      _platformVersion = platformVersion;
-    });
-
-    subscription = TinyFfmpeg.listenProgress.listen((event) {
-      print(event.toString());
-    });
-
     Directory? tempDir = await getApplicationDocumentsDirectory();
     var tempPath = "${tempDir.path}/11.mp3";
     var maskPath = "${tempDir.path}/mask.mp3";
@@ -71,16 +53,41 @@ class _MyAppState extends State<MyApp> {
     args.add(maskPath);
     args.add("-filter_complex");
     //args.add("[0]volume=3[a0];[1]aloop=loop=-1:size=2e+09,volume=1[a1];[a0][a1]amix=inputs=2:duration=first");
-    args.add("[0]adelay=2000|2000,volume=3[a1];[1]volume=0.8[abg];[2]aloop=loop=-1:size=2e+09[a3];[a1][abg][a3]amix=inputs=3:duration=first");
+    args.add(
+        "[0]adelay=2000|2000,volume=3[a1];[1]volume=0.8[abg];[2]aloop=loop=-1:size=2e+09[a3];[a1][abg][a3]amix=inputs=3:duration=first");
+    //args.add("-c:a");
+    //args.add("libmp3lame");
     args.add("-ac");
     args.add("1");
     args.add(outPath);
 
-    TinyFfmpegResult result = await TinyFfmpeg.executeFFmpegCommand(args);
-    debugPrint("$result");
+    // 使用新的 Session API
+    try {
+      debugPrint("executeAsync");
+      _currentSession = await TinyFfmpeg.executeAsync(args);
+      debugPrint("sessionId: ${_currentSession?.sessionId}");
+      // 如果需要取消，可以调用：
+      // await _currentSession?.cancel();
 
-    AudioPlayer _player = AudioPlayer();
-    _player.play(DeviceFileSource(outPath));
+      // 等待执行完成并获取结果
+      TinyFfmpegResult? result = await _currentSession?.getResult();
+      debugPrint("result: $result");
+      if (result != null) {
+        debugPrint("Execution result: $result");
+
+        if (!result.isSuccess) {
+          // 获取详细错误信息
+          String errorMsg = await _currentSession!.getErrorMessage();
+          debugPrint("Detailed error: $errorMsg");
+        } else {
+          // 播放生成的音频文件
+          AudioPlayer _player = AudioPlayer();
+          _player.play(DeviceFileSource(outPath));
+        }
+      }
+    } catch (e) {
+      debugPrint("Error: $e");
+    }
   }
 
   Future<void> checkCopy(String path, String name) async {
@@ -94,6 +101,8 @@ class _MyAppState extends State<MyApp> {
   @override
   void dispose() {
     subscription?.cancel();
+    // 取消正在执行的 Session（如果有）
+    _currentSession?.cancel();
     super.dispose();
   }
 
@@ -105,7 +114,28 @@ class _MyAppState extends State<MyApp> {
           title: const Text('Plugin example app'),
         ),
         body: Center(
-          child: Text('Running on: $_platformVersion\n'),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                onPressed: () async {
+                  initPlatformState();
+                },
+                child: const Text('Create Session'),
+              ),
+              if (_currentSession != null)
+                ElevatedButton(
+                  onPressed: () async {
+                    await _currentSession?.cancel();
+                    setState(() {
+                      _currentSession = null;
+                    });
+                    debugPrint("Session cancelled");
+                  },
+                  child: const Text('Cancel FFmpeg'),
+                ),
+            ],
+          ),
         ),
       ),
     );

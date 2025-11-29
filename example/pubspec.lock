@@ -389,7 +389,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "0.0.5"
+    version: "0.0.10"
   typed_data:
     dependency: transitive
     description:

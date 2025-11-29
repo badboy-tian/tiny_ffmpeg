@@ -24,6 +24,20 @@ int executeFFmpegCommand_New(int64_t handle, int argc, char **argv,
 
 int cancelExecuteFFmpegCommand();
 
+// Session 管理接口
+int64_t createFFmpegSession();
+int cancelFFmpegCommandBySession(int64_t sessionId);
+int isSessionCancelled(int64_t sessionId);
+void destroyFFmpegSession(int64_t sessionId);
+const char* getSessionErrorMessage(int64_t sessionId);
+void appendSessionErrorMessage(int64_t sessionId, const char* message);
+int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv,
+                                     int64_t handle,
+                                     void (*progressCallBack)(int64_t, int, float),
+                                     int64_t totalTime);
+int64_t getCurrentExecutingSessionId(void);
+void setCurrentExecutingSessionId(int64_t sessionId);
+
 #ifdef __cplusplus
 }
 #endif

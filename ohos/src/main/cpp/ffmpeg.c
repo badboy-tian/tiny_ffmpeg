@@ -321,6 +321,23 @@ void term_exit(void) { term_exit_sigsafe(); }
 static volatile int received_sigterm = 0;
 static volatile int received_nb_signals = 0;
 
+// Session 支持：当前执行的 sessionId
+static int64_t current_ffmpeg_session_id = 0;
+
+// 声明 Session 管理函数（在 napi_init.cpp 中实现）
+extern int isSessionCancelled(int64_t sessionId);
+extern void appendSessionErrorMessage(int64_t sessionId, const char* message);
+extern int64_t getCurrentExecutingSessionId(void);
+
+// 供 napi_init.cpp 使用（C 函数，可以被 C++ 调用）
+int64_t get_ffmpeg_current_session_id(void) {
+  return current_ffmpeg_session_id;
+}
+
+void set_ffmpeg_current_session_id(int64_t sessionId) {
+  current_ffmpeg_session_id = sessionId;
+}
+
 // 取消 FFmpeg 命令执行
 // 通过设置 received_sigterm 标志位来触发 FFmpeg 内部的退出机制
 void cancel_ffmpeg_cmd(void) {
@@ -4929,6 +4946,14 @@ static int transcode() {
 #endif
 
   while (!received_sigterm) {
+    // 检查 Session 取消（优先）
+    int64_t sessionId = current_ffmpeg_session_id;
+    if (sessionId != 0 && isSessionCancelled(sessionId)) {
+      av_log(NULL, AV_LOG_WARNING, "Session %ld cancelled\n", (long)sessionId);
+      appendSessionErrorMessage(sessionId, "FFmpeg command was cancelled by user\n");
+      break;
+    }
+    
     int64_t cur_time = av_gettime_relative();
 
     /* if 'q' pressed, exits */
@@ -5093,9 +5118,12 @@ static int64_t getmaxrss(void) {
 static void log_callback_null(void *ptr, int level, const char *fmt,
                               va_list vl) {}
 
-int exe_ffmpeg_cmd(int argc, char **argv) {
+int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv) {
   int i, ret;
   BenchmarkTimeStamps ti;
+
+  current_ffmpeg_session_id = sessionId;
+  received_sigterm = 0;  // 重置取消标志
 
   int savedCode = setjmp(ex_buf__);
   if (savedCode == 0) {
@@ -5150,6 +5178,12 @@ int exe_ffmpeg_cmd(int argc, char **argv) {
     current_time = ti = get_benchmark_time_stamps();
     ret = transcode();
     if (ret < 0) {
+      if (sessionId != 0) {
+        char errMsg[256];
+        snprintf(errMsg, sizeof(errMsg), "FFmpeg execution failed with code: %d\n", main_return_code);
+        appendSessionErrorMessage(sessionId, errMsg);
+      }
+      current_ffmpeg_session_id = 0;
       exit_program(ret);
     }
     if (do_benchmark) {
@@ -5170,9 +5204,15 @@ int exe_ffmpeg_cmd(int argc, char **argv) {
         decode_error_stat[1])
       exit_program(69);
 
+    current_ffmpeg_session_id = 0;
     exit_program(received_nb_signals ? 255 : main_return_code);
   } else {
+    current_ffmpeg_session_id = 0;
     main_return_code = (received_nb_signals) ? 255 : longjmp_value;
   }
   return main_return_code;
+}
+
+int exe_ffmpeg_cmd(int argc, char **argv) {
+  return exe_ffmpeg_cmd_with_session(0, argc, argv);
 }

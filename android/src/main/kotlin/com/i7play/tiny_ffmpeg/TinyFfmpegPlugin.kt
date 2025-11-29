@@ -14,8 +14,16 @@ import io.flutter.plugin.common.EventChannel.EventSink
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.ConcurrentHashMap
 
 /** TinyFfmpegPlugin */
+data class SessionInfo(
+    val sessionId: Long,
+    var future: Future<*>? = null,
+    var result: Result? = null,
+    var isCancelled: Boolean = false
+)
+
 class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
@@ -23,6 +31,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var future: Future<*>? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val sessions = ConcurrentHashMap<Long, SessionInfo>()
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg")
@@ -34,9 +43,6 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
 
     override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
         when (call.method) {
-            "getPlatformVersion" -> {
-                result.success("Android ${android.os.Build.VERSION.RELEASE}")
-            }
             "executeFFmpegCommand" -> {
                 val argc = call.argument<Int>("argc")
                 val argv = call.argument<List<String>>("argv")
@@ -49,57 +55,102 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                     return
                 }
 
-                future = executor.submit {
-                    FFMpegUtils.executeFFmpegCommand(argc, argv.toTypedArray(), object : FFMpegUtils.OnActionListener {
-                        override fun progress(progress: Float) {
-                            val map = hashMapOf<String, Any>()
-                            map["type"] = "progress"
-                            map["code"] = 0
-                            map["message"] = progress
+                // 创建 Session
+                val sessionId = FFMpegUtils.createFFmpegSession()
+                if (sessionId < 0) {
+                    result.error("SESSION_ERROR", "Failed to create session", null)
+                    return
+                }
 
-                            mainHandler.post {
-                                eventSink?.success(map)
-                            }
-                        }
+                val sessionInfo = SessionInfo(sessionId)
+                sessionInfo.result = result
+                sessions[sessionId] = sessionInfo
 
-                        override fun fail(code: Int, msg: String?) {
-                            val map = hashMapOf<String, Any>()
-                            map["type"] = "result"
-                            map["code"] = -1
-                            map["message"] = msg.toString()
-                            
-                            mainHandler.post {
-                                result.success(map)
-                            }
-                        }
+                // 返回 sessionId 给 Dart 层
+                result.success(mapOf("sessionId" to sessionId))
 
-                        override fun success() {
-                            val map = hashMapOf<String, Any>()
-                            map["type"] = "result"
-                            map["code"] = 0
-                            map["message"] = "success"
-                            
-                            mainHandler.post {
-                                result.success(map)
+                sessionInfo.future = executor.submit {
+                    FFMpegUtils.executeFFmpegCommandWithSession(
+                        sessionId,
+                        argc, 
+                        argv.toTypedArray(), 
+                        object : FFMpegUtils.OnActionListener {
+                            override fun progress(progress: Float) {
+                                // 不再发送 progress 事件
                             }
-                        }
-                    })
+
+                            override fun fail(code: Int, msg: String?) {
+                                val map = hashMapOf<String, Any>()
+                                map["type"] = "result"
+                                map["code"] = code
+                                map["message"] = msg ?: "Unknown error"
+                                map["sessionId"] = sessionId
+                                
+                                mainHandler.post {
+                                    // 通过 EventChannel 发送结果事件
+                                    eventSink?.success(map)
+                                    sessionInfo.result?.success(map)
+                                    sessions.remove(sessionId)
+                                    FFMpegUtils.destroyFFmpegSession(sessionId)
+                                }
+                            }
+
+                            override fun success() {
+                                val map = hashMapOf<String, Any>()
+                                map["type"] = "result"
+                                map["code"] = 0
+                                map["message"] = "success"
+                                map["sessionId"] = sessionId
+                                
+                                mainHandler.post {
+                                    // 通过 EventChannel 发送结果事件
+                                    eventSink?.success(map)
+                                    sessionInfo.result?.success(map)
+                                    sessions.remove(sessionId)
+                                    FFMpegUtils.destroyFFmpegSession(sessionId)
+                                }
+                            }
+                        },
+                        -1
+                    )
                 }
             }
-            "showLog" -> {
-                val isShowLog = call.arguments as Boolean
-                FFMpegUtils.showLog(isShowLog)
-                result.success(isShowLog)
+            "cancelSession" -> {
+                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val sessionInfo = sessions[sessionId]
+                if (sessionInfo != null) {
+                    sessionInfo.isCancelled = true
+                    sessionInfo.future?.cancel(true)
+                    FFMpegUtils.cancelFFmpegCommandBySession(sessionId)
+                    result.success(true)
+                } else {
+                    result.success(false)
+                }
+            }
+            "getSessionState" -> {
+                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val sessionInfo = sessions[sessionId]
+                val map = hashMapOf<String, Any>()
+                if (sessionInfo != null) {
+                    map["state"] = if (sessionInfo.isCancelled) "cancelled" else "running"
+                } else {
+                    map["state"] = "not_found"
+                }
+                result.success(map)
+            }
+            "getSessionErrorMessage" -> {
+                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val errorMsg = FFMpegUtils.getSessionErrorMessage(sessionId)
+                result.success(errorMsg)
             }
             "getMediaDuration" -> {
                 val mediaPath = call.arguments as String
                 result.success(FFMpegUtils.getMediaDuration(mediaPath))
             }
-            "cancelExecuteFFmpegCommand" -> {
-                future?.cancel(true)
-                future = null
-                FFMpegUtils.cancelExecuteFFmpegCommand()
-                result.success(true)
+            "showLog" -> {
+                val show = call.argument<Boolean>() ?: true
+                FFMpegUtils.setLogEnabled(show)
+                result.success(null)
             }
             else -> {
                 result.notImplemented()
@@ -113,6 +164,14 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
         eventSink = null
         future?.cancel(true)
         future = null
+        
+        // 清理所有 Session
+        sessions.values.forEach { sessionInfo ->
+            sessionInfo.future?.cancel(true)
+            FFMpegUtils.destroyFFmpegSession(sessionInfo.sessionId)
+        }
+        sessions.clear()
+        
         executor.shutdown()
     }
 
