@@ -44,6 +44,10 @@ class _MyAppState extends State<MyApp> {
     await checkCopy(bgPath, "bg.mp3");
     await checkCopy(icPath, "ic.png");
 
+
+    //打印ffmpeg支持的编码器, 解码器, 硬件加速信息
+    printEncoderAndDecoderInfo();
+
     var args = TinyFFmpegCMD();
     args.add("-i");
     args.add(tempPath);
@@ -87,6 +91,36 @@ class _MyAppState extends State<MyApp> {
       }
     } catch (e) {
       debugPrint("Error: $e");
+    }
+  }
+  
+
+  Future<void> printEncoderAndDecoderInfo() async {
+    var args = TinyFFmpegCMD();
+    args.add("-encoders");
+    var result = await TinyFfmpeg.executeAsync(args);
+    if (result != null) {
+      debugPrint("result: $result");
+    } else {
+      debugPrint("result is null");
+    }
+
+    args = TinyFFmpegCMD();
+    args.add("-decoders");
+    result = await TinyFfmpeg.executeAsync(args);
+    if (result != null) {
+      debugPrint("result: $result");
+    } else {
+      debugPrint("result is null");
+    }
+
+    args = TinyFFmpegCMD();
+    args.add("-hwaccels");
+    result = await TinyFfmpeg.executeAsync(args);
+    if (result != null) {
+      debugPrint("result: $result");
+    } else {
+      debugPrint("result is null");
     }
   }
 
