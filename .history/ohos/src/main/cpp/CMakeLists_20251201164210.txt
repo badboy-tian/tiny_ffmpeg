@@ -1,0 +1,72 @@
+# the minimum version of CMake.
+cmake_minimum_required(VERSION 3.5.0)
+project(voicechanger)
+
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -Wno-int-conversion -Wl,-Bsymbolic")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-int-conversion -Wl,-Bsymbolic")
+
+set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(DEFINED PACKAGE_FIND_FILE)
+    include(${PACKAGE_FIND_FILE})
+endif()
+
+# AKI
+set(AKI_ROOT_PATH ${NATIVERENDER_ROOT_PATH}/../../../oh_modules/@ohos/aki)
+set(CMAKE_MODULE_PATH ${AKI_ROOT_PATH})
+find_package(Aki REQUIRED)
+
+# 🔥 递归收集 ffmpeg 源码（排除 graph 和 resources 相关文件）
+file(GLOB_RECURSE FFMPEG_DIR
+    CONFIGURE_DEPENDS
+    ${NATIVERENDER_ROOT_PATH}/ffmpeg/*.c
+)
+# 排除 graph 和 resources 相关文件
+list(FILTER FFMPEG_DIR EXCLUDE REGEX ".*/graph/.*")
+list(FILTER FFMPEG_DIR EXCLUDE REGEX ".*/resources/.*")
+
+include_directories(
+    ${NATIVERENDER_ROOT_PATH}
+    ${NATIVERENDER_ROOT_PATH}/include
+    ${NATIVERENDER_ROOT_PATH}/ffmpeg
+)
+
+add_library(ffmpegutils SHARED
+    napi_init.cpp
+    ${FFMPEG_DIR}
+)
+
+# 系统库
+target_link_libraries(ffmpegutils PUBLIC
+    libace_napi.z.so
+    libhilog_ndk.z.so
+    Aki::libjsbind
+)
+
+# FFmpeg 静态库
+target_link_libraries(ffmpegutils PRIVATE
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavformat.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavcodec.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavfilter.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavutil.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libswresample.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libswscale.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/lib/libavdevice.a
+)
+
+# 三方依赖
+target_link_libraries(ffmpegutils PRIVATE
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/zlib/${OHOS_ARCH}/lib/libz.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/lib/libmp3lame.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/fdk-aac/${OHOS_ARCH}/lib/libfdk-aac.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/lib/libx264.a
+)
+
+# include
+target_include_directories(ffmpegutils PRIVATE
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/include
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/include
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/include
+)

@@ -63,7 +63,35 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt, va_list 
   
   // 收集 ERROR、FATAL 和 WARNING 级别的日志到Session错误缓冲区
   // 同时也收集 WARNING 级别的日志，因为很多错误信息是以 WARNING 级别输出的
-  if (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING) {
+  bool shouldCollect = (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING);
+
+  if (!shouldCollect && level <= AV_LOG_INFO) {
+    const char* errorKeywords[] = {
+      "Invalid argument",
+      "not a suitable",
+      "Conversion failed",
+      "pipe::",
+      "[NULL @",
+      "failed",
+      "error",
+      "Error",
+      "ERROR",
+      "cannot",
+      "Cannot",
+      "Unable",
+      "unable",
+      "Video:",
+      "Input #"
+    };
+    for (size_t i = 0; i < sizeof(errorKeywords) / sizeof(errorKeywords[0]); i++) {
+      if (strstr(buffer, errorKeywords[i]) != nullptr) {
+        shouldCollect = true;
+        break;
+      }
+    }
+  }
+
+  if (shouldCollect) {
     if (g_currentCallbackInfo != nullptr && g_currentCallbackInfo->sessionId != 0) {
       appendSessionErrorMessage(g_currentCallbackInfo->sessionId, buffer);
     }
