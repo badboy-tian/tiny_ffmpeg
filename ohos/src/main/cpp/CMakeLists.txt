@@ -40,13 +40,17 @@ add_library(ffmpegutils SHARED
 
 # 系统库
 target_link_libraries(ffmpegutils PUBLIC
-    libace_napi.z.so
-    libhilog_ndk.z.so
-    libnative_media_codecbase.so
-    libnative_media_core.so
-    libnative_media_venc.so
-    libnative_media_vdec.so
-    libnative_media_acodec.so
+    libace_napi.z.so libEGL.so libGLESv3.so libace_ndk.z.so libuv.so libhilog_ndk.z.so
+    libnative_media_codecbase.so 
+    libnative_media_core.so 
+    libnative_media_vdec.so 
+    libnative_window.so
+    libnative_media_venc.so 
+    libnative_media_acodec.so 
+    libnative_media_avdemuxer.so 
+    libnative_media_avsource.so 
+    libnative_media_avmuxer.so
+    libohaudio.so
     Aki::libjsbind
 )
 

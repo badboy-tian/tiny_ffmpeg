@@ -44,9 +44,8 @@ class _MyAppState extends State<MyApp> {
     await checkCopy(bgPath, "bg.mp3");
     await checkCopy(icPath, "ic.png");
 
-
     //打印ffmpeg支持的编码器, 解码器, 硬件加速信息
-    printEncoderAndDecoderInfo();
+    //printEncoderAndDecoderInfo();
 
     var args = TinyFFmpegCMD();
     args.add("-i");
@@ -70,8 +69,8 @@ class _MyAppState extends State<MyApp> {
       debugPrint("executeAsync");
       _currentSession = await TinyFfmpeg.executeAsync(args);
       debugPrint("sessionId: ${_currentSession?.sessionId}");
-      // 如果需要取消，可以调用：
-      // await _currentSession?.cancel();
+      //如果需要取消，可以调用：
+      //await _currentSession?.cancel();
 
       // 等待执行完成并获取结果
       TinyFfmpegResult? result = await _currentSession?.getResult();
@@ -88,37 +87,20 @@ class _MyAppState extends State<MyApp> {
           AudioPlayer _player = AudioPlayer();
           _player.play(DeviceFileSource(outPath));
         }
+
+        await _currentSession?.cancel();
       }
     } catch (e) {
       debugPrint("Error: $e");
     }
   }
-  
 
   Future<void> printEncoderAndDecoderInfo() async {
     var args = TinyFFmpegCMD();
     args.add("-encoders");
     var result = await TinyFfmpeg.executeAsync(args);
     if (result != null) {
-      debugPrint("result: $result");
-    } else {
-      debugPrint("result is null");
-    }
-
-    args = TinyFFmpegCMD();
-    args.add("-decoders");
-    result = await TinyFfmpeg.executeAsync(args);
-    if (result != null) {
-      debugPrint("result: $result");
-    } else {
-      debugPrint("result is null");
-    }
-
-    args = TinyFFmpegCMD();
-    args.add("-hwaccels");
-    result = await TinyFfmpeg.executeAsync(args);
-    if (result != null) {
-      debugPrint("result: $result");
+      debugPrint("result: ${result.sessionId}");
     } else {
       debugPrint("result is null");
     }

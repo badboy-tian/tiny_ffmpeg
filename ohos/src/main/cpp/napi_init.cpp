@@ -61,11 +61,9 @@ typedef struct CallBackInfo {
 #include <fstream>
 #include <sstream>
 
-// 全局变量存储当前的 CallBackInfo
-static CallBackInfo *g_currentCallbackInfo = nullptr;
-
 // 全局变量控制是否输出日志到控制台（默认开启）
 static bool g_logEnabled = true;
+static std::mutex g_logEnabledMutex;  // 保护 g_logEnabled 的访问
 
 // Session 管理（完整版本，与其他平台同步）
 #define MAX_SESSIONS 64
@@ -78,6 +76,9 @@ typedef struct {
   int errorBufferLen;
   std::mutex errorMutex;
   int inUse;
+  // 存储回调信息，用于日志回调
+  CallBackInfo callbackInfo;
+  std::mutex callbackMutex;  // 保护 callbackInfo 的访问
 } SessionContext;
 
 static SessionContext sessions[MAX_SESSIONS];
@@ -95,6 +96,13 @@ int64_t createFFmpegSession() {
       sessions[i].cancelled = 0;
       sessions[i].errorBuffer[0] = '\0';
       sessions[i].errorBufferLen = 0;
+      // 初始化 callbackInfo
+      sessions[i].callbackInfo.onFFmpegProgress = nullptr;
+      sessions[i].callbackInfo.onFFmpegLog = nullptr;
+      sessions[i].callbackInfo.onFFmpegProgressMessage = nullptr;
+      sessions[i].callbackInfo.hasLogCallback = false;
+      sessions[i].callbackInfo.hasProgressCallback = false;
+      sessions[i].callbackInfo.sessionId = sessionId;
       sessions[i].inUse = 1;
       return sessionId;
     }
@@ -202,6 +210,21 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt,
                      &print_prefix);
   va_end(vl_copy);
 
+  // 通过当前 sessionId 查找对应的 CallBackInfo（线程安全）
+  int64_t currentSessionId = get_ffmpeg_current_session_id();
+  CallBackInfo *callbackInfo = nullptr;
+  
+  if (currentSessionId != 0) {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+      if (sessions[i].sessionId == currentSessionId && sessions[i].inUse) {
+        std::lock_guard<std::mutex> callbackLock(sessions[i].callbackMutex);
+        callbackInfo = &sessions[i].callbackInfo;
+        break;
+      }
+    }
+  }
+
   // 收集 ERROR 和 FATAL 级别的日志到Session错误缓冲区
   // 同时也收集 WARNING 级别的日志，因为很多错误信息是以 WARNING 级别输出的
   // 另外收集包含错误关键词的 INFO 级别日志（如 "Invalid argument", "not a
@@ -237,28 +260,23 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt,
     }
   }
 
-  if (shouldCollect) {
-    if (g_currentCallbackInfo != nullptr &&
-        g_currentCallbackInfo->sessionId != 0) {
-      // 添加换行符，确保错误信息格式正确
-      char errorLine[8194];
-      snprintf(errorLine, sizeof(errorLine), "%s\n", line);
-      appendSessionErrorMessage(g_currentCallbackInfo->sessionId, errorLine);
-    }
+  if (shouldCollect && currentSessionId != 0) {
+    // 添加换行符，确保错误信息格式正确
+    char errorLine[8194];
+    snprintf(errorLine, sizeof(errorLine), "%s\n", line);
+    appendSessionErrorMessage(currentSessionId, errorLine);
   }
 
   // 如果设置了 log callback，调用它（使用格式化后的 line）
-  if (g_currentCallbackInfo != nullptr &&
-      g_currentCallbackInfo->hasLogCallback &&
-      g_currentCallbackInfo->onFFmpegLog != nullptr) {
-    g_currentCallbackInfo->onFFmpegLog->Invoke<void>(level, std::string(line));
+  if (callbackInfo != nullptr && callbackInfo->hasLogCallback &&
+      callbackInfo->onFFmpegLog != nullptr) {
+    callbackInfo->onFFmpegLog->Invoke<void>(level, std::string(line));
   }
 
   // 检查是否是进度信息（FFmpeg 的进度输出格式：size=... time=... bitrate=...
   // speed=...）
-  if (g_currentCallbackInfo != nullptr &&
-      g_currentCallbackInfo->hasProgressCallback &&
-      g_currentCallbackInfo->onFFmpegProgressMessage != nullptr) {
+  if (callbackInfo != nullptr && callbackInfo->hasProgressCallback &&
+      callbackInfo->onFFmpegProgressMessage != nullptr) {
     std::string logLine(line);
     // 检查是否包含进度信息的关键字
     if (logLine.find("size=") != std::string::npos &&
@@ -273,15 +291,17 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt,
         progressMsg.pop_back();
       }
       if (!progressMsg.empty()) {
-        g_currentCallbackInfo->onFFmpegProgressMessage->Invoke<void>(
-            progressMsg);
+        callbackInfo->onFFmpegProgressMessage->Invoke<void>(progressMsg);
       }
     }
   }
 
-  // 仍然输出到日志（根据 g_logEnabled 开关控制）
-  if (g_logEnabled) {
-    OH_LOG_ERROR(LOG_APP, "========> %{public}s", line);
+  // 仍然输出到日志（根据 g_logEnabled 开关控制，线程安全）
+  {
+    std::lock_guard<std::mutex> lock(g_logEnabledMutex);
+    if (g_logEnabled) {
+      OH_LOG_ERROR(LOG_APP, "========> %{public}s", line);
+    }
   }
 }
 
@@ -306,17 +326,25 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
     }
   }
 
-  CallBackInfo onActionListener;
-  onActionListener.onFFmpegProgress =
-      aki::JSBind::GetJSFunction(uuid + "_onFFmpegProgress");
-  onActionListener.hasLogCallback = false;
-  onActionListener.hasProgressCallback = false;
-  onActionListener.sessionId = sessionId;
-  onActionListener.onFFmpegLog = nullptr;
-  onActionListener.onFFmpegProgressMessage = nullptr;
+  // 将回调信息存储到 SessionContext 中（线程安全）
+  {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+      if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
+        std::lock_guard<std::mutex> callbackLock(sessions[i].callbackMutex);
+        sessions[i].callbackInfo.onFFmpegProgress =
+            aki::JSBind::GetJSFunction(uuid + "_onFFmpegProgress");
+        sessions[i].callbackInfo.hasLogCallback = false;
+        sessions[i].callbackInfo.hasProgressCallback = false;
+        sessions[i].callbackInfo.sessionId = sessionId;
+        sessions[i].callbackInfo.onFFmpegLog = nullptr;
+        sessions[i].callbackInfo.onFFmpegProgressMessage = nullptr;
+        break;
+      }
+    }
+  }
 
-  // 总是设置 g_currentCallbackInfo 以便收集错误信息
-  g_currentCallbackInfo = &onActionListener;
+  // 设置全局日志回调（FFmpeg 的日志回调是全局的，但我们在回调中通过 sessionId 查找对应的 CallBackInfo）
   av_log_set_callback(log_call_back_with_callback);
 
   int ret = exe_ffmpeg_cmd_with_session(sessionId, cmdLen, argv1);
@@ -347,17 +375,35 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
     }
   }
 
-  // 清理全局变量（总是清理，因为我们总是设置了 g_currentCallbackInfo）
-  g_currentCallbackInfo = nullptr;
-
-  for (int i = 0; i < cmdLen; ++i) {
-    free(argv1[i]);
+  // 清理回调信息（线程安全）
+  {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+      if (sessions[i].sessionId == sessionId) {
+        std::lock_guard<std::mutex> callbackLock(sessions[i].callbackMutex);
+        sessions[i].callbackInfo.onFFmpegProgress = nullptr;
+        sessions[i].callbackInfo.onFFmpegLog = nullptr;
+        sessions[i].callbackInfo.onFFmpegProgressMessage = nullptr;
+        sessions[i].callbackInfo.hasLogCallback = false;
+        sessions[i].callbackInfo.hasProgressCallback = false;
+        break;
+      }
+    }
   }
+
+  // 释放内存：使用 delete[] 因为是用 new 分配的
+  for (int i = 0; i < cmdLen; ++i) {
+    delete[] argv1[i];
+  }
+  delete[] argv1;  // 释放指针数组本身
   return ret;
 }
 
-// 设置日志输出开关
-void setLogEnabled(bool enabled) { g_logEnabled = enabled; }
+// 设置日志输出开关（线程安全）
+void setLogEnabled(bool enabled) {
+  std::lock_guard<std::mutex> lock(g_logEnabledMutex);
+  g_logEnabled = enabled;
+}
 
 JSBIND_ADDON(ffmpegutils)
 

@@ -1622,7 +1622,6 @@ static int map_auto_video(Muxer *mux, const OptionsContext *o) {
     InputStream *file_best_ist = NULL;
     int64_t file_best_score = 0;
     for (int i = 0; i < ifile->nb_streams; i++) {
-            if (!ifile->streams[i]) continue;
       InputStream *ist = ifile->streams[i];
       int64_t score;
 

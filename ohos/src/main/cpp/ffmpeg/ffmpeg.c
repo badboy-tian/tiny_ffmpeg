@@ -340,6 +340,12 @@ static void ffmpeg_cleanup(int ret) {
   av_freep(&input_files);
   av_freep(&output_files);
 
+  // 重置计数器，确保下次执行时状态干净
+  nb_input_files = 0;
+  nb_output_files = 0;
+  nb_filtergraphs = 0;
+  nb_decoders = 0;
+
   uninit_opts();
 
   avformat_network_deinit();
@@ -998,6 +1004,7 @@ int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv) {
   atomic_store(&transcode_init_done, 0);
   ffmpeg_exited = 0;
   main_return_code = 0;
+  copy_ts_first_pts = AV_NOPTS_VALUE;  // 重置时间戳
 
   if (setjmp(ex_buf__)) {
     // Called from exit_program
