@@ -248,8 +248,11 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt,
         "Cannot",
         "Unable",
         "unable",
-        "Video:", // Capture probe info
-        "Input #" // Capture probe info
+        "Video:",
+        "Input #",
+        "muxer",
+        "muxing",
+        "stream error",
     };
     for (size_t i = 0; i < sizeof(errorKeywords) / sizeof(errorKeywords[0]);
          i++) {
