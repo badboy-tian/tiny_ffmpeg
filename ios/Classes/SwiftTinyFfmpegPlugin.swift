@@ -180,35 +180,18 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_setLogEnabled(_ enabled: Int32)
     
     @_silgen_name("Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result")
-     func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(code: Int, msg: UnsafeMutablePointer<CChar>?) {
-        let msg = String(cString: msg!, encoding: String.Encoding.utf8)!
-            var map = Dictionary<String, Any>()
-            map["type"] = "result"
-        map["code"] = code
-        map["message"] = msg
+    func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(sessionId: Int64, code: Int32, msg: UnsafePointer<CChar>?) {
+        guard let msgPtr = msg else { return }
+        let msgStr = String(cString: msgPtr)
+        var map = Dictionary<String, Any>()
+        map["type"] = "result"
+        map["sessionId"] = sessionId
+        map["code"] = Int(code)
+        map["message"] = msgStr
         
-        // 查找对应的 Session 并返回结果
-        sessionQueue.sync {
-            for (sessionId, var sessionInfo) in sessions {
-                if sessionInfo.result != nil {
-                    map["sessionId"] = sessionId
-                DispatchQueue.main.async {
-                        // 通过 EventChannel 发送结果事件
-                        sessionInfo.eventSink?(map)
-                        sessionInfo.result?(map)
-                }
-                    sessions.removeValue(forKey: sessionId)
-                    Java_com_i7play_tiny_ffmpeg_FFMpegUtils_destroyFFmpegSession(sessionId)
-                    break
-                }
-            }
-        }
-        
-        // 向后兼容：如果没有找到 Session，使用旧的逻辑
-        if SwiftTinyFfmpegPlugin.re != nil {
-                DispatchQueue.main.async {
-                    SwiftTinyFfmpegPlugin.re!(map)
-            }
+        // 通过 EventChannel 发送结果
+        DispatchQueue.main.async {
+            SwiftTinyFfmpegPlugin.events?(map)
         }
     }
 }

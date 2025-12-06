@@ -1,34 +1,35 @@
 PODS:
-  - audioplayers (0.0.1):
+  - audioplayers_darwin (0.0.1):
     - Flutter
   - Flutter (1.0.0)
-  - path_provider_ios (0.0.1):
+  - path_provider_foundation (0.0.1):
     - Flutter
-  - tiny_ffmpeg (0.0.2):
+    - FlutterMacOS
+  - tiny_ffmpeg (0.0.5):
     - Flutter
 
 DEPENDENCIES:
-  - audioplayers (from `.symlinks/plugins/audioplayers/ios`)
+  - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/ios`)
   - Flutter (from `Flutter`)
-  - path_provider_ios (from `.symlinks/plugins/path_provider_ios/ios`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - tiny_ffmpeg (from `.symlinks/plugins/tiny_ffmpeg/ios`)
 
 EXTERNAL SOURCES:
-  audioplayers:
-    :path: ".symlinks/plugins/audioplayers/ios"
+  audioplayers_darwin:
+    :path: ".symlinks/plugins/audioplayers_darwin/ios"
   Flutter:
     :path: Flutter
-  path_provider_ios:
-    :path: ".symlinks/plugins/path_provider_ios/ios"
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
   tiny_ffmpeg:
     :path: ".symlinks/plugins/tiny_ffmpeg/ios"
 
 SPEC CHECKSUMS:
-  audioplayers: 455322b54050b30ea4b1af7cd9e9d105f74efa8c
-  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
-  path_provider_ios: 7d7ce634493af4477d156294792024ec3485acd5
-  tiny_ffmpeg: 53d01aabe4d3d34cda50917c26c89acffddcb0af
+  audioplayers_darwin: ccf9c770ee768abb07e26d90af093f7bab1c12ab
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  path_provider_foundation: 080d55be775b7414fd5a5ef3ac137b97b097e564
+  tiny_ffmpeg: 04c82107f6491ac5d83284448a989d8d01252c5c
 
-PODFILE CHECKSUM: 2283d81173d04373ccdfcd38fcc5970b8caf66eb
+PODFILE CHECKSUM: f6646acc97db8678a8d07f2f5c433690f72a2172
 
-COCOAPODS: 1.15.2
+COCOAPODS: 1.16.2

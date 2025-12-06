@@ -2,13 +2,13 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <stdlib.h>
-#include "include/ffmpeg.h"
-#include "include/ffmpeg_cmd.h"
+#include "ffmpeg.h"
+#include "ffmpeg_cmd.h"
 
 //保证同时只能一个线程执行
 static pthread_mutex_t cmdLock;
 static int cmdLockHasInit = 0;
-bool hasRegistered = false;
+// bool hasRegistered = false;  // iOS: 新版 FFmpeg 不需要手动注册
 
 // Session 管理
 #define MAX_SESSIONS 64
@@ -142,13 +142,14 @@ int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv,
                                      int64_t handle,
                                    void (*progressCallBack)(int64_t, int, float),
                                    int64_t totalTime) {
-    if (!hasRegistered) {
-        av_register_all();
-        avcodec_register_all();
-        avfilter_register_all();
-        avformat_network_init();
-        hasRegistered = true;
-    }
+    // iOS: 新版 FFmpeg 会自动注册，不需要手动调用
+    // if (!hasRegistered) {
+    //     av_register_all();
+    //     avcodec_register_all();
+    //     avfilter_register_all();
+    //     avformat_network_init();
+    //     hasRegistered = true;
+    // }
     if (!cmdLockHasInit) {
         pthread_mutex_init(&cmdLock, NULL);
         cmdLockHasInit = 1;
