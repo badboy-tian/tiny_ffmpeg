@@ -352,8 +352,16 @@ static void ffmpeg_cleanup(int ret)
     av_freep(&print_graphs_file);
     av_freep(&print_graphs_format);
 
+    // 释放 input_files 和 output_files，并重置计数器
+    // 这是修复第二次调用 FFmpeg 时崩溃的关键
     av_freep(&input_files);
+    nb_input_files = 0;
     av_freep(&output_files);
+    nb_output_files = 0;
+
+    // 同时重置 filtergraphs 和 decoders 计数器
+    nb_filtergraphs = 0;
+    nb_decoders = 0;
 
     uninit_opts();
 
