@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** TinyFfmpegPlugin */
 data class SessionInfo(
@@ -32,6 +33,9 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
     private var future: Future<*>? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap<Long, SessionInfo>()
+    
+    // 添加执行锁，防止并发执行导致的崩溃
+    private val isExecuting = AtomicBoolean(false)
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg")
@@ -55,6 +59,16 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                     return
                 }
 
+                // 检查是否有任务正在执行，如果有则返回忙碌状态
+                if (isExecuting.get()) {
+                    val map = hashMapOf<String, Any>()
+                    map["type"] = "result"
+                    map["code"] = -2
+                    map["message"] = "FFmpeg 正在执行中，请等待完成后再试"
+                    result.success(map)
+                    return
+                }
+
                 // 创建 Session
                 val sessionId = FFMpegUtils.createFFmpegSession()
                 if (sessionId < 0) {
@@ -70,53 +84,64 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 result.success(mapOf("sessionId" to sessionId))
 
                 sessionInfo.future = executor.submit {
-                    FFMpegUtils.executeFFmpegCommandWithSession(
-                        sessionId,
-                        argc, 
-                        argv.toTypedArray(), 
-                        object : FFMpegUtils.OnActionListener {
-                            override fun progress(progress: Float) {
-                                // 不再发送 progress 事件
-                            }
-
-                            override fun fail(code: Int, msg: String?) {
-                                val map = hashMapOf<String, Any>()
-                                map["type"] = "result"
-                                map["code"] = code
-                                map["message"] = msg ?: "Unknown error"
-                                map["sessionId"] = sessionId
-                                
-                                mainHandler.post {
-                                    // 通过 EventChannel 发送结果事件
-                                    eventSink?.success(map)
-                                    sessionInfo.result?.success(map)
-                                    sessions.remove(sessionId)
-                                    FFMpegUtils.destroyFFmpegSession(sessionId)
-                                }
-                            }
-
-                            override fun success() {
-                                val map = hashMapOf<String, Any>()
-                                map["type"] = "result"
-                                map["code"] = 0
-                                map["message"] = "success"
-                                map["sessionId"] = sessionId
-                                
-                                mainHandler.post {
-                                    // 通过 EventChannel 发送结果事件
-                                    eventSink?.success(map)
-                                    sessionInfo.result?.success(map)
-                                    sessions.remove(sessionId)
-                                    FFMpegUtils.destroyFFmpegSession(sessionId)
-                                }
-                            }
-                        },
-                        -1
-                    )
+                    // 设置执行标志
+                    isExecuting.set(true)
+                    
+                    try {
+                        // 在执行前添加小延迟，确保之前的资源完全释放
+                        Thread.sleep(50)
+                        
+                        // 新版 FFmpeg 8.0 直接返回结果码，不再使用回调
+                        val ret = FFMpegUtils.executeFFmpegCommandWithSession(
+                            sessionId,
+                            argc, 
+                            argv.toTypedArray(), 
+                            null,  // 不再使用回调
+                            -1
+                        )
+                        
+                        val map = hashMapOf<String, Any>()
+                        map["type"] = "result"
+                        map["sessionId"] = sessionId
+                        
+                        if (ret == 0) {
+                            map["code"] = 0
+                            map["message"] = "success"
+                        } else {
+                            map["code"] = ret
+                            // 获取错误信息
+                            val errorMsg = FFMpegUtils.getSessionErrorMessage(sessionId)
+                            map["message"] = if (errorMsg.isNullOrEmpty()) "FFmpeg execution failed with code: $ret" else errorMsg
+                        }
+                        
+                        mainHandler.post {
+                            // 通过 EventChannel 发送结果事件
+                            eventSink?.success(map)
+                            sessions.remove(sessionId)
+                            FFMpegUtils.destroyFFmpegSession(sessionId)
+                        }
+                    } catch (e: Exception) {
+                        val map = hashMapOf<String, Any>()
+                        map["type"] = "result"
+                        map["code"] = -1
+                        map["message"] = e.message ?: "Unknown error"
+                        map["sessionId"] = sessionId
+                        
+                        mainHandler.post {
+                            eventSink?.success(map)
+                            sessions.remove(sessionId)
+                            FFMpegUtils.destroyFFmpegSession(sessionId)
+                        }
+                    } finally {
+                        // 执行完成后添加延迟，确保 FFmpeg 内部状态完全清理
+                        Thread.sleep(100)
+                        // 清除执行标志
+                        isExecuting.set(false)
+                    }
                 }
             }
             "cancelSession" -> {
-                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
                 val sessionInfo = sessions[sessionId]
                 if (sessionInfo != null) {
                     sessionInfo.isCancelled = true
@@ -128,7 +153,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 }
             }
             "getSessionState" -> {
-                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
                 val sessionInfo = sessions[sessionId]
                 val map = hashMapOf<String, Any>()
                 if (sessionInfo != null) {
@@ -139,7 +164,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 result.success(map)
             }
             "getSessionErrorMessage" -> {
-                val sessionId = call.argument<Long>("sessionId") ?: 0L
+                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
                 val errorMsg = FFMpegUtils.getSessionErrorMessage(sessionId)
                 result.success(errorMsg)
             }
@@ -148,7 +173,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 result.success(FFMpegUtils.getMediaDuration(mediaPath))
             }
             "showLog" -> {
-                val show = call.argument<Boolean>() ?: true
+                val show = call.argument<Boolean>("show") ?: true
                 FFMpegUtils.setLogEnabled(show)
                 result.success(null)
             }
