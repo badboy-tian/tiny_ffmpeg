@@ -6,6 +6,7 @@
 #include <android/log.h>
 #include <jni.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,11 +16,78 @@
 
 #define LOG_TAG "tiny_ffmpeg"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define LOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__)
 
 // 全局日志开关
 static volatile int g_logEnabled = 1;
 static pthread_mutex_t g_logMutex = PTHREAD_MUTEX_INITIALIZER;
+
+/**
+ * 自定义 FFmpeg 日志回调函数
+ * 将 FFmpeg 的日志重定向到 Android logcat
+ *
+ * @param ptr FFmpeg 内部上下文指针
+ * @param level 日志级别
+ * @param fmt 格式化字符串
+ * @param vl 可变参数列表
+ */
+static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
+                                va_list vl) {
+  // 检查日志开关
+  pthread_mutex_lock(&g_logMutex);
+  int enabled = g_logEnabled;
+  pthread_mutex_unlock(&g_logMutex);
+
+  if (!enabled) {
+    return;
+  }
+
+  // 检查日志级别
+  if (level > av_log_get_level()) {
+    return;
+  }
+
+  // 格式化日志消息
+  char line[1024];
+  vsnprintf(line, sizeof(line), fmt, vl);
+
+  // 移除末尾的换行符（Android log 会自动添加）
+  size_t len = strlen(line);
+  if (len > 0 && line[len - 1] == '\n') {
+    line[len - 1] = '\0';
+  }
+
+  // 跳过空消息
+  if (strlen(line) == 0) {
+    return;
+  }
+
+  // 根据 FFmpeg 日志级别映射到 Android 日志级别
+  switch (level) {
+  case AV_LOG_PANIC:
+  case AV_LOG_FATAL:
+  case AV_LOG_ERROR:
+    LOGE("[FFmpeg] %s", line);
+    break;
+  case AV_LOG_WARNING:
+    LOGW("[FFmpeg] %s", line);
+    break;
+  case AV_LOG_INFO:
+    LOGI("[FFmpeg] %s", line);
+    break;
+  case AV_LOG_VERBOSE:
+    LOGV("[FFmpeg] %s", line);
+    break;
+  case AV_LOG_DEBUG:
+  case AV_LOG_TRACE:
+  default:
+    LOGD("[FFmpeg] %s", line);
+    break;
+  }
+}
 
 // 声明 ffmpeg.c 中的函数
 extern int64_t get_ffmpeg_current_session_id(void);
@@ -55,6 +123,11 @@ static void initSessions() {
     pthread_mutex_init(&sessions[i].errorMutex, NULL);
   }
   sessionsInitialized = 1;
+
+  // 初始化时设置自定义日志回调，将 FFmpeg 日志重定向到 Android logcat
+  av_log_set_callback(ffmpeg_log_callback);
+  av_log_set_level(AV_LOG_INFO);
+  LOGI("FFmpeg log callback initialized");
 }
 
 // 创建 FFmpeg Session
@@ -284,6 +357,9 @@ Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_getMediaDuration(JNIEnv *env,
 
 JNIEXPORT void JNICALL Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_setLogEnabled(
     JNIEnv *env, jclass clazz, jboolean enabled) {
+  // 确保日志回调已初始化
+  initSessions();
+
   pthread_mutex_lock(&g_logMutex);
   g_logEnabled = enabled ? 1 : 0;
   pthread_mutex_unlock(&g_logMutex);

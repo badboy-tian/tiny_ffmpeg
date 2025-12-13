@@ -15,7 +15,6 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** TinyFfmpegPlugin */
 data class SessionInfo(
@@ -33,9 +32,6 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
     private var future: Future<*>? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap<Long, SessionInfo>()
-    
-    // 添加执行锁，防止并发执行导致的崩溃
-    private val isExecuting = AtomicBoolean(false)
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg")
@@ -59,16 +55,6 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                     return
                 }
 
-                // 检查是否有任务正在执行，如果有则返回忙碌状态
-                if (isExecuting.get()) {
-                    val map = hashMapOf<String, Any>()
-                    map["type"] = "result"
-                    map["code"] = -2
-                    map["message"] = "FFmpeg 正在执行中，请等待完成后再试"
-                    result.success(map)
-                    return
-                }
-
                 // 创建 Session
                 val sessionId = FFMpegUtils.createFFmpegSession()
                 if (sessionId < 0) {
@@ -84,13 +70,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                 result.success(mapOf("sessionId" to sessionId))
 
                 sessionInfo.future = executor.submit {
-                    // 设置执行标志
-                    isExecuting.set(true)
-                    
                     try {
-                        // 在执行前添加小延迟，确保之前的资源完全释放
-                        Thread.sleep(50)
-                        
                         // 新版 FFmpeg 8.0 直接返回结果码，不再使用回调
                         val ret = FFMpegUtils.executeFFmpegCommandWithSession(
                             sessionId,
@@ -133,10 +113,7 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                             FFMpegUtils.destroyFFmpegSession(sessionId)
                         }
                     } finally {
-                        // 执行完成后添加延迟，确保 FFmpeg 内部状态完全清理
-                        Thread.sleep(100)
-                        // 清除执行标志
-                        isExecuting.set(false)
+                        // 清理完成
                     }
                 }
             }
