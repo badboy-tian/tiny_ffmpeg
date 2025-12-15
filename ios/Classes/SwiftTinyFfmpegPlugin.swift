@@ -75,9 +75,16 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
               cargs[i] = pointer
           }
         
-          let task = DispatchWorkItem {
+          let task = DispatchWorkItem { [weak self] in
               _ = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommandWithSession(
                   sessionId, Int32(argc), cargs, -1)
+              
+              cargs.deallocate()
+              Java_com_i7play_tiny_ffmpeg_FFMpegUtils_destroyFFmpegSession(sessionId)
+              
+              self?.sessionQueue.sync {
+                  self?.sessions.removeValue(forKey: sessionId)
+              }
           }
           
           sessionQueue.sync {
@@ -90,7 +97,7 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
           sessionQueue.sync {
               if var sessionInfo = sessions[sessionId] {
                   sessionInfo.isCancelled = true
-                  sessionInfo.task?.cancel()
+                  // sessionInfo.task?.cancel()
                   Java_com_i7play_tiny_ffmpeg_FFMpegUtils_cancelFFmpegCommandBySession(sessionId)
                   sessions[sessionId] = sessionInfo
                   result(true)
