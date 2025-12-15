@@ -118,7 +118,8 @@ class TinyFfmpeg {
       if (type == "result") {
         final code = event["code"] as int? ?? -1;
         final message = event["message"]?.toString() ?? "";
-        session._setResult(code, message);
+        final errorLog = event["errorLog"]?.toString();  // 获取错误日志
+        session._setResult(code, message, errorLog: errorLog);
       }
     }
 
@@ -150,6 +151,7 @@ class TinyFfmpegSession {
   SessionState _state = SessionState.running;
   int? _returnCode;
   String? _failStackTrace;
+  String? _errorLog;  // 存储从原生层返回的完整错误日志
   StreamSubscription? _subscription;
   final Completer<TinyFfmpegResult?> _resultCompleter =
       Completer<TinyFfmpegResult?>();
@@ -197,7 +199,13 @@ class TinyFfmpegSession {
   }
 
   /// Gets the detailed error message for this session.
+  /// 优先返回从 result 事件中获取的 errorLog（因为 session 可能已被销毁）
   Future<String> getErrorMessage() async {
+    // 如果已经有缓存的 errorLog，直接返回（避免 session 已销毁的问题）
+    if (_errorLog != null && _errorLog!.isNotEmpty) {
+      return _errorLog!;
+    }
+    // 否则尝试从原生层获取（可能返回空，如果 session 已销毁）
     final errorMsg = await TinyFfmpeg._channel.invokeMethod<String>(
       "getSessionErrorMessage",
       {"sessionId": int.parse(sessionId)},
@@ -205,9 +213,10 @@ class TinyFfmpegSession {
     return errorMsg ?? "";
   }
 
-  void _setResult(int code, String message) {
+  void _setResult(int code, String message, {String? errorLog}) {
     _returnCode = code;
     _failStackTrace = message;
+    _errorLog = errorLog;  // 保存错误日志
     if (code == 0) {
       _state = SessionState.completed;
     } else {

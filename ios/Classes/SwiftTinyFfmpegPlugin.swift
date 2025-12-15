@@ -190,11 +190,19 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(sessionId: Int64, code: Int32, msg: UnsafePointer<CChar>?) {
         guard let msgPtr = msg else { return }
         let msgStr = String(cString: msgPtr)
+        
+        // 在销毁 session 之前获取完整的错误日志
+        var errorLog = ""
+        if let errorPtr = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getSessionErrorMessage(sessionId) {
+            errorLog = String(cString: errorPtr)
+        }
+        
         var map = Dictionary<String, Any>()
         map["type"] = "result"
         map["sessionId"] = sessionId
         map["code"] = Int(code)
         map["message"] = msgStr
+        map["errorLog"] = errorLog  // 包含完整的错误日志
         
         // 通过 EventChannel 发送结果
         DispatchQueue.main.async {

@@ -25,26 +25,19 @@
 static volatile int g_logEnabled = 1;
 static pthread_mutex_t g_logMutex = PTHREAD_MUTEX_INITIALIZER;
 
+// 当前执行的 sessionId（用于日志收集）
+static volatile int64_t g_currentSessionId = 0;
+static pthread_mutex_t g_sessionIdMutex = PTHREAD_MUTEX_INITIALIZER;
+
+// 前向声明
+void appendSessionErrorMessage(int64_t sessionId, const char *message);
+
 /**
  * 自定义 FFmpeg 日志回调函数
- * 将 FFmpeg 的日志重定向到 Android logcat
- *
- * @param ptr FFmpeg 内部上下文指针
- * @param level 日志级别
- * @param fmt 格式化字符串
- * @param vl 可变参数列表
+ * 将 FFmpeg 的日志重定向到 Android logcat，并收集到 Session 错误缓冲区
  */
 static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
                                 va_list vl) {
-  // 检查日志开关
-  pthread_mutex_lock(&g_logMutex);
-  int enabled = g_logEnabled;
-  pthread_mutex_unlock(&g_logMutex);
-
-  if (!enabled) {
-    return;
-  }
-
   // 检查日志级别
   if (level > av_log_get_level()) {
     return;
@@ -54,14 +47,63 @@ static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
   char line[1024];
   vsnprintf(line, sizeof(line), fmt, vl);
 
-  // 移除末尾的换行符（Android log 会自动添加）
+  // 移除末尾的换行符
   size_t len = strlen(line);
   if (len > 0 && line[len - 1] == '\n') {
     line[len - 1] = '\0';
+    len--;
   }
 
   // 跳过空消息
-  if (strlen(line) == 0) {
+  if (len == 0) {
+    return;
+  }
+
+  // 收集日志到 Session 错误缓冲区（参考 iOS 实现）
+  int shouldCollect = 0;
+  
+  // 收集 ERROR、FATAL 和 WARNING 级别的日志
+  if (level == AV_LOG_FATAL || level == AV_LOG_ERROR || level == AV_LOG_WARNING) {
+    shouldCollect = 1;
+  }
+  
+  // 也收集包含关键信息的 INFO 级别日志
+  if (!shouldCollect && level <= AV_LOG_INFO) {
+    const char *keywords[] = {
+      "Video:", "Audio:", "Input #", "Stream #",
+      "Duration:", "bitrate:",
+      "Invalid argument", "not a suitable", "Conversion failed",
+      "failed", "error", "Error", "ERROR",
+      "cannot", "Cannot", "Unable", "unable"
+    };
+    int numKeywords = sizeof(keywords) / sizeof(keywords[0]);
+    for (int i = 0; i < numKeywords; i++) {
+      if (strstr(line, keywords[i]) != NULL) {
+        shouldCollect = 1;
+        break;
+      }
+    }
+  }
+  
+  // 如果需要收集，添加到当前 session 的错误缓冲区
+  if (shouldCollect) {
+    pthread_mutex_lock(&g_sessionIdMutex);
+    int64_t currentSessionId = g_currentSessionId;
+    pthread_mutex_unlock(&g_sessionIdMutex);
+    
+    LOGD("[LogCollect] shouldCollect=1, sessionId=%lld, line=%s", (long long)currentSessionId, line);
+    if (currentSessionId > 0) {
+      appendSessionErrorMessage(currentSessionId, line);
+      appendSessionErrorMessage(currentSessionId, "\n");
+    }
+  }
+
+  // 检查日志开关
+  pthread_mutex_lock(&g_logMutex);
+  int enabled = g_logEnabled;
+  pthread_mutex_unlock(&g_logMutex);
+
+  if (!enabled) {
     return;
   }
 
@@ -171,7 +213,7 @@ void appendSessionErrorMessage(int64_t sessionId, const char *message) {
 
   pthread_mutex_lock(&sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    if (sessions[i].sessionId == sessionId) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
       pthread_mutex_lock(&sessions[i].errorMutex);
 
       int remaining = MAX_ERROR_BUFFER_SIZE - sessions[i].errorBufferLen - 1;
@@ -211,7 +253,7 @@ const char *getSessionErrorMessage(int64_t sessionId) {
   static char empty[] = "";
   pthread_mutex_lock(&sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    if (sessions[i].sessionId == sessionId) {
+    if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
       pthread_mutex_lock(&sessions[i].errorMutex);
       const char *msg = sessions[i].errorBuffer;
       pthread_mutex_unlock(&sessions[i].errorMutex);
@@ -236,6 +278,15 @@ void destroyFFmpegSession(int64_t sessionId) {
 
 // 执行 FFmpeg 命令（带 Session）
 int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv) {
+  LOGI("[DEBUG] executeFFmpegCommandWithSession called, sessionId=%lld", (long long)sessionId);
+  
+  // 设置当前 sessionId（用于日志收集）
+  pthread_mutex_lock(&g_sessionIdMutex);
+  g_currentSessionId = sessionId;
+  pthread_mutex_unlock(&g_sessionIdMutex);
+  
+  LOGI("[DEBUG] g_currentSessionId set to %lld", (long long)g_currentSessionId);
+
   // 清空该 session 的错误缓冲区
   pthread_mutex_lock(&sessionsMutex);
   for (int i = 0; i < MAX_SESSIONS; i++) {
@@ -251,6 +302,11 @@ int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv) {
   pthread_mutex_unlock(&sessionsMutex);
 
   int ret = exe_ffmpeg_cmd_with_session(sessionId, argc, argv);
+
+  // 清除当前 sessionId
+  pthread_mutex_lock(&g_sessionIdMutex);
+  g_currentSessionId = 0;
+  pthread_mutex_unlock(&g_sessionIdMutex);
 
   return ret;
 }

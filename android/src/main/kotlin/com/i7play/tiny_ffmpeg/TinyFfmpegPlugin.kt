@@ -94,9 +94,14 @@ class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHa
                             map["message"] = if (errorMsg.isNullOrEmpty()) "FFmpeg execution failed with code: $ret" else errorMsg
                         }
                         
+                        // 在销毁 session 之前获取完整的错误日志（关键：必须在 destroyFFmpegSession 之前）
+                        val fullErrorLog = FFMpegUtils.getSessionErrorMessage(sessionId)
+                        map["errorLog"] = fullErrorLog ?: ""
+                        
                         mainHandler.post {
-                            // 通过 EventChannel 发送结果事件
+                            // 通过 EventChannel 发送结果事件（errorLog 已包含在 map 中）
                             eventSink?.success(map)
+                            // 立即销毁 session（因为 errorLog 已经发送给 Dart 了）
                             sessions.remove(sessionId)
                             FFMpegUtils.destroyFFmpegSession(sessionId)
                         }
