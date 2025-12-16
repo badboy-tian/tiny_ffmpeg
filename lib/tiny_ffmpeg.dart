@@ -8,35 +8,35 @@ import 'package:tiny_ffmpeg/tiny_ffmpeg_cmd.dart';
 class TinyFfmpeg {
   static const MethodChannel _channel = MethodChannel('tiny_ffmpeg');
   static const EventChannel _eventChannel =
-      EventChannel("tiny_ffmpeg_progress_event");
+  EventChannel("tiny_ffmpeg_progress_event");
   static Stream listenProgress = _eventChannel.receiveBroadcastStream();
 
   // 全局事件监听器，确保 EventChannel 始终在监听
   static StreamSubscription? _globalEventSubscription;
   static final Map<String, Function(Map<dynamic, dynamic>)> _sessionHandlers =
-      {};
+  {};
   // 用于存储尚未注册 sessionId 的事件（防止竞态条件）
   static final Map<String, List<Map<dynamic, dynamic>>> _pendingEvents =
-      <String, List<Map<dynamic, dynamic>>>{};
+  <String, List<Map<dynamic, dynamic>>>{};
 
   // 初始化全局事件监听（确保 EventChannel 已经建立连接）
   static void _ensureEventChannelListening() {
     if (_globalEventSubscription == null) {
       _globalEventSubscription =
           _eventChannel.receiveBroadcastStream().listen((event) {
-        if (event is Map) {
-          final eventSessionId = event["sessionId"]?.toString();
-          if (eventSessionId != null && eventSessionId.isNotEmpty) {
-            // 优先查找已注册的处理器
-            if (_sessionHandlers.containsKey(eventSessionId)) {
-              _sessionHandlers[eventSessionId]!(event);
-            } else {
-              // 如果处理器尚未注册，将事件暂存
-              _pendingEvents.putIfAbsent(eventSessionId, () => []).add(event);
+            if (event is Map) {
+              final eventSessionId = event["sessionId"]?.toString();
+              if (eventSessionId != null && eventSessionId.isNotEmpty) {
+                // 优先查找已注册的处理器
+                if (_sessionHandlers.containsKey(eventSessionId)) {
+                  _sessionHandlers[eventSessionId]!(event);
+                } else {
+                  // 如果处理器尚未注册，将事件暂存
+                  _pendingEvents.putIfAbsent(eventSessionId, () => []).add(event);
+                }
+              }
             }
-          }
-        }
-      });
+          });
     }
   }
 
@@ -78,8 +78,8 @@ class TinyFfmpeg {
   /// [cmd] The command builder containing the arguments.
   /// Returns a [TinyFfmpegSession] that can be used to cancel or get the result.
   static Future<TinyFfmpegSession> executeAsync(
-    TinyFFmpegCMD cmd,
-  ) async {
+      TinyFFmpegCMD cmd,
+      ) async {
     // 确保 EventChannel 已经在监听（必须在调用 invokeMapMethod 之前）
     _ensureEventChannelListening();
 
@@ -89,7 +89,7 @@ class TinyFfmpeg {
 
     // 先调用 native 端获取 sessionId
     Map<String, dynamic>? result =
-        await _channel.invokeMapMethod("executeFFmpegCommand", map);
+    await _channel.invokeMapMethod("executeFFmpegCommand", map);
 
     final sessionId = result?["sessionId"];
     if (sessionId == null) {
@@ -118,7 +118,8 @@ class TinyFfmpeg {
       if (type == "result") {
         final code = event["code"] as int? ?? -1;
         final message = event["message"]?.toString() ?? "";
-        session._setResult(code, message);
+        final errorLog = event["errorLog"]?.toString();  // 获取错误日志
+        session._setResult(code, message, errorLog: errorLog);
       }
     }
 
@@ -150,9 +151,10 @@ class TinyFfmpegSession {
   SessionState _state = SessionState.running;
   int? _returnCode;
   String? _failStackTrace;
+  String? _errorLog;  // 存储从原生层返回的完整错误日志
   StreamSubscription? _subscription;
   final Completer<TinyFfmpegResult?> _resultCompleter =
-      Completer<TinyFfmpegResult?>();
+  Completer<TinyFfmpegResult?>();
   VoidCallback? _onCancel;
 
   TinyFfmpegSession(this._sessionId);
@@ -197,7 +199,13 @@ class TinyFfmpegSession {
   }
 
   /// Gets the detailed error message for this session.
+  /// 优先返回从 result 事件中获取的 errorLog（因为 session 可能已被销毁）
   Future<String> getErrorMessage() async {
+    // 如果已经有缓存的 errorLog，直接返回（避免 session 已销毁的问题）
+    if (_errorLog != null && _errorLog!.isNotEmpty) {
+      return _errorLog!;
+    }
+    // 否则尝试从原生层获取（可能返回空，如果 session 已销毁）
     final errorMsg = await TinyFfmpeg._channel.invokeMethod<String>(
       "getSessionErrorMessage",
       {"sessionId": int.parse(sessionId)},
@@ -205,9 +213,10 @@ class TinyFfmpegSession {
     return errorMsg ?? "";
   }
 
-  void _setResult(int code, String message) {
+  void _setResult(int code, String message, {String? errorLog}) {
     _returnCode = code;
     _failStackTrace = message;
+    _errorLog = errorLog;  // 保存错误日志
     if (code == 0) {
       _state = SessionState.completed;
     } else {

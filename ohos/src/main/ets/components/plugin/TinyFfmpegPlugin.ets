@@ -89,15 +89,16 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
         ffmpegutils.executeFFmpegCommandWithSession(sessionId, uuid, args.length, args).then((ret) => {
             const session = this.sessions.get(sessionId);
             if (session && !session.isCancelled) {
+                // 在销毁 session 之前获取完整的错误日志
                 const errorMsg = ffmpegutils.getSessionErrorMessage(sessionId) as string;
-            const resultMap: Record<string, Object> = {};
-            if (ret == 0) {
+                const resultMap: Record<string, Object> = {};
+                if (ret == 0) {
                     resultMap["type"] = "result";
-                resultMap["code"] = 0;
+                    resultMap["code"] = 0;
                     resultMap["message"] = "success";
-            } else {
+                } else {
                     resultMap["type"] = "result";
-                resultMap["code"] = ret;
+                    resultMap["code"] = ret;
                     if (errorMsg && errorMsg.length > 0) {
                         resultMap["message"] = `Error code: ${ret}\n\nDetailed error log:\n${errorMsg}`;
                     } else {
@@ -105,6 +106,7 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
                     }
                 }
                 resultMap["sessionId"] = sessionId;
+                resultMap["errorLog"] = errorMsg || "";  // 添加 errorLog 字段，供 Dart 端缓存
                 // 通过 EventChannel 发送结果事件（使用当前的 eventSink，而不是保存的）
                 if (this.eventSink) {
                     this.eventSink.success(resultMap);
