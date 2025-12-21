@@ -75,9 +75,16 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
               cargs[i] = pointer
           }
         
-          let task = DispatchWorkItem {
+          let task = DispatchWorkItem { [weak self] in
               _ = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommandWithSession(
                   sessionId, Int32(argc), cargs, -1)
+              
+              cargs.deallocate()
+              Java_com_i7play_tiny_ffmpeg_FFMpegUtils_destroyFFmpegSession(sessionId)
+              
+              self?.sessionQueue.sync {
+                  self?.sessions.removeValue(forKey: sessionId)
+              }
           }
           
           sessionQueue.sync {
@@ -90,7 +97,7 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
           sessionQueue.sync {
               if var sessionInfo = sessions[sessionId] {
                   sessionInfo.isCancelled = true
-                  sessionInfo.task?.cancel()
+                  // sessionInfo.task?.cancel()
                   Java_com_i7play_tiny_ffmpeg_FFMpegUtils_cancelFFmpegCommandBySession(sessionId)
                   sessions[sessionId] = sessionInfo
                   result(true)
@@ -180,35 +187,26 @@ public class SwiftTinyFfmpegPlugin: NSObject, FlutterPlugin, FlutterStreamHandle
     func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_setLogEnabled(_ enabled: Int32)
     
     @_silgen_name("Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result")
-     func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(code: Int, msg: UnsafeMutablePointer<CChar>?) {
-        let msg = String(cString: msg!, encoding: String.Encoding.utf8)!
-            var map = Dictionary<String, Any>()
-            map["type"] = "result"
-        map["code"] = code
-        map["message"] = msg
+    func Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(sessionId: Int64, code: Int32, msg: UnsafePointer<CChar>?) {
+        guard let msgPtr = msg else { return }
+        let msgStr = String(cString: msgPtr)
         
-        // 查找对应的 Session 并返回结果
-        sessionQueue.sync {
-            for (sessionId, var sessionInfo) in sessions {
-                if sessionInfo.result != nil {
-                    map["sessionId"] = sessionId
-                DispatchQueue.main.async {
-                        // 通过 EventChannel 发送结果事件
-                        sessionInfo.eventSink?(map)
-                        sessionInfo.result?(map)
-                }
-                    sessions.removeValue(forKey: sessionId)
-                    Java_com_i7play_tiny_ffmpeg_FFMpegUtils_destroyFFmpegSession(sessionId)
-                    break
-                }
-            }
+        // 在销毁 session 之前获取完整的错误日志
+        var errorLog = ""
+        if let errorPtr = Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getSessionErrorMessage(sessionId) {
+            errorLog = String(cString: errorPtr)
         }
         
-        // 向后兼容：如果没有找到 Session，使用旧的逻辑
-        if SwiftTinyFfmpegPlugin.re != nil {
-                DispatchQueue.main.async {
-                    SwiftTinyFfmpegPlugin.re!(map)
-            }
+        var map = Dictionary<String, Any>()
+        map["type"] = "result"
+        map["sessionId"] = sessionId
+        map["code"] = Int(code)
+        map["message"] = msgStr
+        map["errorLog"] = errorLog  // 包含完整的错误日志
+        
+        // 通过 EventChannel 发送结果
+        DispatchQueue.main.async {
+            SwiftTinyFfmpegPlugin.events?(map)
         }
     }
 }

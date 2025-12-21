@@ -1,18 +1,31 @@
-cmake_minimum_required(VERSION 3.10.2)
+cmake_minimum_required(VERSION 3.22.1)
 
 project("testffmpeg")
 
 set(LIB_DIR ${CMAKE_SOURCE_DIR}/${ANDROID_ABI})
 
-file(GLOB FFMPEG_DIR ${CMAKE_SOURCE_DIR}/*.c)
+# FFmpeg 8.0 fftools 源文件
+set(FFTOOLS_DIR ${CMAKE_SOURCE_DIR}/fftools)
+file(GLOB FFTOOLS_SOURCES
+    ${FFTOOLS_DIR}/*.c
+    ${FFTOOLS_DIR}/textformat/*.c
+)
 
-include_directories(ffmpeg/include ${CMAKE_SOURCE_DIR})
-#添加库, 动态导入
+# 包含目录
+include_directories(
+    ${CMAKE_SOURCE_DIR}/include
+    ${FFTOOLS_DIR}
+)
+
+# 添加 FFmpeg 动态库
 add_library(ffmpeg SHARED IMPORTED)
-# 设置库路径, ANDROID_ABI 自动赋予值
 set_target_properties(ffmpeg PROPERTIES IMPORTED_LOCATION ${LIB_DIR}/libffmpeg.so)
 
-add_library(ffmpeg-invoke SHARED ffmpeg_utils.cpp ${FFMPEG_DIR})
+# 创建主库
+add_library(ffmpeg-invoke SHARED
+    ffmpeg_cmd.c
+    ${FFTOOLS_SOURCES}
+)
 
 find_library(log-lib log)
 
