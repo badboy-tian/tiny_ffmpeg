@@ -40,7 +40,7 @@ add_library(ffmpegutils SHARED
 
 # 系统库
 target_link_libraries(ffmpegutils PUBLIC
-    libace_napi.z.so libEGL.so libGLESv3.so libace_ndk.z.so libuv.so libhilog_ndk.z.so
+    libace_napi.z.so libEGL.so libGLESv3.so libace_ndk.z.so libuv.so libhilog_ndk.z.so libc++_shared.so
     libnative_media_codecbase.so 
     libnative_media_core.so 
     libnative_media_vdec.so 
@@ -71,6 +71,7 @@ target_link_libraries(ffmpegutils PRIVATE
     ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/lib/libmp3lame.a
     ${NATIVERENDER_ROOT_PATH}/thirdparty/fdk-aac/${OHOS_ARCH}/lib/libfdk-aac.a
     ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/lib/libx264.a
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/libzimg/${OHOS_ARCH}/lib/libzimg.a
 )
 
 # include
@@ -78,4 +79,5 @@ target_include_directories(ffmpegutils PRIVATE
     ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/include
     ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/include
     ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/include
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/libzimg/${OHOS_ARCH}/include
 )
