@@ -55,6 +55,9 @@ static int tiny_media_info(const char *path, char *json, size_t capacity)
     int vivid = 0, hdr_plus = 0, dovi = 0, got_frame = 0;
     // 保留 Dolby Vision 配置，避免统一入口将双层内容误当成单层视频。
     int dovi_profile = 0, dovi_compatibility = 0, dovi_enhancement = 0;
+    // 记录全部音轨，不能只看第一条 AAC 就错误直拷其它不兼容音轨。
+    char audio_streams[768] = "[";
+    size_t audio_length = 1;
     int64_t duration = -1;
     double rotation = 0;
     AVCodecParameters *parameters = NULL;
@@ -74,8 +77,21 @@ static int tiny_media_info(const char *path, char *json, size_t capacity)
         AVStream *stream = format->streams[i];
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && video < 0 &&
             !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) video = (int)i;
-        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) audio = 1;
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            const char *codec = avcodec_get_name(stream->codecpar->codec_id);
+            int written = snprintf(audio_streams + audio_length, sizeof(audio_streams) - audio_length,
+                "%s{\"index\":%u,\"codec\":\"%s\"}", audio ? "," : "", i, codec);
+            // 超多音轨时明确失败，不能截断列表后把未知音轨误判为可直拷。
+            if (written < 0 || (size_t)written >= sizeof(audio_streams) - audio_length) {
+                ret = AVERROR(ENOSPC); goto done;
+            }
+            audio_length += (size_t)written;
+            audio = 1;
+        }
     }
+    if (audio_length + 2 > sizeof(audio_streams)) { ret = AVERROR(ENOSPC); goto done; }
+    audio_streams[audio_length++] = ']';
+    audio_streams[audio_length] = '\0';
     if (video >= 0) {
         parameters = format->streams[video]->codecpar;
         side = av_packet_side_data_get(parameters->coded_side_data, parameters->nb_coded_side_data, AV_PKT_DATA_DOVI_CONF);
@@ -130,12 +146,12 @@ static int tiny_media_info(const char *path, char *json, size_t capacity)
     }
     ret = snprintf(json, capacity,
         "{\"durationMilliseconds\":%lld,\"videoStreamIndex\":%d,\"hasVideo\":%s,\"hasAudio\":%s,"
-        "\"width\":%d,\"height\":%d,\"bitDepth\":%d,\"rotation\":%.0f,"
+        "\"audioStreams\":%s,\"width\":%d,\"height\":%d,\"bitDepth\":%d,\"rotation\":%.0f,"
         "\"pixelFormat\":\"%s\",\"colorPrimaries\":\"%s\",\"colorTransfer\":\"%s\","
         "\"colorSpace\":\"%s\",\"colorRange\":\"%s\",\"hdrVivid\":%s,\"hdr10Plus\":%s,\"dolbyVision\":%s,"
         "\"dolbyVisionProfile\":%d,\"dolbyVisionCompatibilityId\":%d,\"dolbyVisionEnhancementLayer\":%s}",
         (long long)duration, video, parameters ? "true" : "false", audio ? "true" : "false",
-        parameters ? parameters->width : 0, parameters ? parameters->height : 0, depth, rotation,
+        audio_streams, parameters ? parameters->width : 0, parameters ? parameters->height : 0, depth, rotation,
         pixel ? pixel : "unknown", primaries ? primaries : "unknown", transfer ? transfer : "unknown",
         space ? space : "unknown", range ? range : "unknown", vivid ? "true" : "false",
         hdr_plus ? "true" : "false", dovi ? "true" : "false",

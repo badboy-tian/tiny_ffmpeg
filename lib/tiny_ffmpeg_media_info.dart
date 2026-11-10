@@ -1,11 +1,23 @@
 import 'package:tiny_ffmpeg/tiny_ffmpeg_cmd.dart';
 
+/// 原生使用绝对轨道索引，完整保留音轨列表供容器兼容性判断。
+class TinyFfmpegAudioStream {
+  final int index;
+  final String codec;
+
+  TinyFfmpegAudioStream.fromMap(Map<dynamic, dynamic> map)
+      : index = (map['index'] as num?)?.toInt() ?? -1,
+        codec = map['codec'] as String? ?? 'unknown';
+}
+
 /// Source properties used to preserve bit depth and HDR signalling.
 class TinyFfmpegMediaInfo {
   final int durationMilliseconds;
   final bool hasVideo;
   final int videoStreamIndex;
   final bool hasAudio;
+  // 老版本原生缺少字段时保持空列表，应用必须采取保守转码策略。
+  final List<TinyFfmpegAudioStream> audioStreams;
   final int width;
   final int height;
   final int bitDepth;
@@ -30,6 +42,10 @@ class TinyFfmpegMediaInfo {
         // 记录绝对流索引，跳过封面图片后仍裁剪正确的视频流。
         videoStreamIndex = (map['videoStreamIndex'] as num?)?.toInt() ?? -1,
         hasAudio = map['hasAudio'] == true,
+        audioStreams = List.unmodifiable(
+          ((map['audioStreams'] as List?) ?? const [])
+              .map((stream) => TinyFfmpegAudioStream.fromMap(stream as Map)),
+        ),
         width = (map['width'] as num?)?.toInt() ?? 0,
         height = (map['height'] as num?)?.toInt() ?? 0,
         bitDepth = (map['bitDepth'] as num?)?.toInt() ?? 0,
@@ -54,6 +70,22 @@ class TinyFfmpegMediaInfo {
       dolbyVision ||
       colorTransfer == 'arib-std-b67' ||
       colorTransfer == 'smpte2084';
+
+  // 硬件解码常报告半平面存储；编码器使用等价平面格式，只改变内存布局而不改变位深/色彩。
+  String get encodingPixelFormat =>
+      const {
+        'nv12': 'yuv420p',
+        'nv21': 'yuv420p',
+        'p010le': 'yuv420p10le',
+      }[pixelFormat] ??
+      pixelFormat;
+
+  // 只直拷已确认的 AAC 音轨；缺少探测字段或混入其它编码时由调用方转 AAC。
+  bool get canCopyAudioToMp4 =>
+      hasAudio &&
+      audioStreams.isNotEmpty &&
+      audioStreams
+          .every((stream) => stream.index >= 0 && stream.codec == 'aac');
 
   int get displayWidth => rotation.abs() % 180 == 90 ? height : width;
   int get displayHeight => rotation.abs() % 180 == 90 ? width : height;
@@ -89,7 +121,7 @@ class TinyFfmpegMediaInfo {
       'yuv422p10le',
       'yuv444p10le',
     ];
-    if (!formats.contains(pixelFormat) ||
+    if (!formats.contains(encodingPixelFormat) ||
         (bitDepth != 8 && bitDepth != 10) ||
         (isHdr && bitDepth != 10)) {
       throw UnsupportedError(
@@ -151,7 +183,7 @@ class TinyFfmpegMediaInfo {
       '-preset',
       preset,
       '-pix_fmt',
-      pixelFormat,
+      encodingPixelFormat,
       '-fps_mode',
       'passthrough',
     ];
@@ -181,7 +213,8 @@ class TinyFfmpegMediaInfo {
       '-crf',
       lossless && !hevc ? '0' : '$crf',
       '-c:a',
-      'copy',
+      canCopyAudioToMp4 ? 'copy' : 'aac',
+      if (!canCopyAudioToMp4) ...['-b:a', '192k'],
       '-movflags',
       '+faststart',
       output,

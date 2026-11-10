@@ -19,6 +19,9 @@ void main() {
   var earlyResult = false;
   var failCreation = false;
   var badProbe = false;
+  var statePolls = 0;
+  var pendingStatePolls = 0;
+  var failState = false;
 
   Future<void> emit(Map<String, dynamic> value) async {
     final delivered = Completer<void>();
@@ -51,6 +54,12 @@ void main() {
         case 'cancelSession':
           cancelCalls++;
           return true;
+        case 'getSessionState':
+          statePolls++;
+          if (failState) throw PlatformException(code: 'CHANNEL_LOST');
+          return {
+            'state': statePolls <= pendingStatePolls ? 'cancelled' : 'not_found'
+          };
         case 'getMediaInfo':
           return badProbe ? '{"error":-22}' : jsonEncode(source());
         case 'showLog':
@@ -65,6 +74,9 @@ void main() {
     earlyResult = false;
     failCreation = false;
     badProbe = false;
+    statePolls = 0;
+    pendingStatePolls = 0;
+    failState = false;
   });
 
   // 回归真实缺陷，取消必须完成已经开始等待的 Future，重复取消不能重复调原生。
@@ -85,6 +97,33 @@ void main() {
       'code': 0
     });
     expect(session.state, SessionState.cancelled);
+  });
+
+  // 不发送 result 事件，确认取消信号不能代替真实停止，重复调用共用同一等待者。
+  test('cancelAndWait confirms native removal without an event', () async {
+    pendingStatePolls = 2;
+    final session = await TinyFfmpeg.executeAsync(TinyFFmpegCMD());
+    final before = cancelCalls;
+    await Future.wait([session.cancelAndWait(), session.cancelAndWait()]);
+    expect(statePolls, 3);
+    expect(cancelCalls, before + 1);
+  });
+
+  // 方法通道也失效时必须显式失败，让宿主保留可能仍在写入的文件。
+  test('cancelAndWait reports unavailable native state', () async {
+    failState = true;
+    final session = await TinyFfmpeg.executeAsync(TinyFFmpegCMD());
+    await expectLater(
+        session.cancelAndWait(), throwsA(isA<PlatformException>()));
+  });
+
+  // 卡住的原生任务不能让界面永久等待；超时只是未知状态，不能当作停止成功。
+  test('cancelAndWait bounds an unconfirmed native stop', () async {
+    pendingStatePolls = 100;
+    final session = await TinyFfmpeg.executeAsync(TinyFFmpegCMD());
+    await expectLater(
+        session.cancelAndWait(timeout: const Duration(milliseconds: 20)),
+        throwsA(isA<TimeoutException>()));
   });
 
   test('early results are delivered before session registration', () async {
@@ -123,6 +162,11 @@ void main() {
       'errorLog': 'Invalid data'
     });
     expect((await failed.getResult())?.isSuccess, false);
+    // Dart 失败不是原生停止证据，仍应发取消信号并查询槽位。
+    final before = cancelCalls;
+    await failed.cancelAndWait();
+    expect(cancelCalls, before + 1);
+    expect(statePolls, 1);
     expect(await failed.getErrorMessage(), 'Invalid data');
     earlyResult = true;
     final next = await TinyFfmpeg.executeAsync(TinyFFmpegCMD());
@@ -297,6 +341,56 @@ void main() {
     }
   });
 
+  // 包括混合音轨及老原生版本，避免只看第一条 AAC 就把不兼容轨道复制进 MP4。
+  test('audio probe conservatively decides MP4 passthrough', () {
+    for (final codecs in <List<String>?>[
+      null,
+      [],
+      ['aac'],
+      ['aac', 'aac'],
+      ['aac', 'pcm_alaw']
+    ]) {
+      final map = source();
+      if (codecs == null) {
+        map.remove('audioStreams');
+      } else {
+        map['audioStreams'] = [
+          for (var i = 0; i < codecs.length; i++)
+            {'index': i + 2, 'codec': codecs[i]}
+        ];
+      }
+      final info = TinyFfmpegMediaInfo.fromMap(map);
+      final copy = codecs != null &&
+          codecs.isNotEmpty &&
+          codecs.every((codec) => codec == 'aac');
+      expect(info.canCopyAudioToMp4, copy);
+      final args = info.exportCommand(input: '/in', output: '/out.mp4').build();
+      expect(args[args.indexOf('-c:a') + 1], copy ? 'copy' : 'aac');
+      expect(
+          info.audioStreams.map((track) => track.codec).toList(), codecs ?? []);
+    }
+  });
+
+  // 真机 VP9/HEVC 探测可返回半平面布局，转换到等价平面格式不能误降位深。
+  test('semiplanar decoder layouts use equivalent encoder formats', () {
+    for (final entry in {
+      'nv12': 'yuv420p',
+      'nv21': 'yuv420p',
+      'p010le': 'yuv420p10le'
+    }.entries) {
+      final map = source();
+      map['pixelFormat'] = entry.key;
+      if (entry.key != 'p010le') {
+        map['bitDepth'] = 8;
+        map['hdrVivid'] = false;
+        map['colorTransfer'] = 'bt709';
+      }
+      final info = TinyFfmpegMediaInfo.fromMap(map);
+      final args = info.exportCommand(input: '/in', output: '/out.mp4').build();
+      expect(args[args.indexOf('-pix_fmt') + 1], entry.value);
+    }
+  });
+
   // 非法裁剪仍在生成命令前拦截，新增 HDR 类型不能削弱原有输入保护。
   test('invalid regions fail before encoding', () {
     final info = TinyFfmpegMediaInfo.fromMap(source());
@@ -327,6 +421,9 @@ Map<String, dynamic> source() => {
       'durationMilliseconds': 5000,
       'hasVideo': true,
       'hasAudio': true,
+      'audioStreams': [
+        {'index': 2, 'codec': 'aac'}
+      ],
       'videoStreamIndex': 1,
       'width': 1920,
       'height': 1080,

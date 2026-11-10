@@ -189,6 +189,7 @@ class TinyFfmpegSession {
   String? _failStackTrace;
   String? _errorLog; // 存储从原生层返回的完整错误日志
   Future<void>? _cancelFuture;
+  Future<void>? _nativeStopFuture;
   final Completer<TinyFfmpegResult?> _resultCompleter =
       Completer<TinyFfmpegResult?>();
   VoidCallback? _onCancel;
@@ -220,6 +221,34 @@ class TinyFfmpegSession {
       {'sessionId': int.parse(sessionId)},
     );
     return _cancelFuture!;
+  }
+
+  /// 取消信号与真实停止分开确认，事件通道故障时仍可安全等待原生槽位释放。
+  Future<void> cancelAndWait({Duration timeout = const Duration(seconds: 10)}) {
+    return _nativeStopFuture ??= _cancelAndWait(timeout).timeout(timeout);
+  }
+
+  Future<void> _cancelAndWait(Duration timeout) async {
+    if (_state == SessionState.completed) return;
+    // 通道错误会提前把 Dart session 标记 failed，但不能据此认为原生已停止。
+    final failedBeforeCancel = _state == SessionState.failed;
+    await cancel();
+    if (failedBeforeCancel) {
+      await TinyFfmpeg._channel.invokeMethod<void>('cancelSession', {
+        'sessionId': int.parse(sessionId),
+      });
+    }
+    final watch = Stopwatch()..start();
+    while (watch.elapsed < timeout) {
+      final status = await TinyFfmpeg._channel.invokeMapMethod<String, dynamic>(
+        'getSessionState',
+        {'sessionId': int.parse(sessionId)},
+      );
+      // cancelled 仅说明收到了信号；三端在执行线程结束后才移除 Session。
+      if (status?['state'] == 'not_found') return;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    throw TimeoutException('Native session stop was not confirmed', timeout);
   }
 
   /// Returns the same terminal result to current and subsequent waiters.

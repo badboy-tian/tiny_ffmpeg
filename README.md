@@ -115,3 +115,8 @@ flutter build apk --debug --target-platform android-arm64 -t test_driver/commerc
 宿主测试设置 NO_PROXY=localhost,127.0.0.1,::1 可避免本地 HTTP 代理影响 Flutter 测试运行器的连接。
 
 example/test_driver/dynamic_hdr_device.dart 覆盖 Dolby Vision 8.4、5、8.1 和 HDR10+ 元数据版本 0、1 的默认无损剪辑、默认无损 crop、有损 crop，核对输出 profile、位深、色彩信息和关闭日志后的进度。输入分别命名为 dovi.mp4、dovi5.mp4、dovi81.mp4、hdr10plus.mp4、hdr10plus0.mp4，放入应用 documents 目录。8.4 使用真实手机素材，5 和 8.1 使用带独立 RPU 的合成测试素材。主机侧另外逐帧核对 RPU 语义、HDR10+ 原始 T.35 数据和无损解码像素，不能只依赖文件上的 HDR 标记。
+
+<!-- 音轨探测兼容旧原生版本，不能从缺省字段推断可以直拷。 -->
+`getMediaInfo()` 返回 `audioStreams`（每项含绝对 `index` 与 `codec`）。
+`canCopyAudioToMp4` 仅在已知音轨全部为 AAC 时为 true；未知或混合编码使用 AAC 回退。
+调用 `session.cancelAndWait()` 可在独立方法通道上确认原生任务停止；失败或超时时，宿主应保留仍可能正在写入的输出文件。
