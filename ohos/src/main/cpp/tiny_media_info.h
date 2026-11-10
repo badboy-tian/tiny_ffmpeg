@@ -124,22 +124,41 @@ static int tiny_media_info(const char *path, char *json, size_t capacity)
         decoder->thread_count = 1;
         ret = avcodec_open2(decoder, avcodec_find_decoder(parameters->codec_id), NULL);
         if (ret < 0) goto done;
-        for (int count = 0; count < 256 && !got_frame; count++) {
+        // 音频可能比视频提前数秒开始；包数不能代表文件有效性，统一由截止时间限制探测。
+        while (!got_frame) {
+            if (tiny_probe_interrupt(&deadline)) { ret = AVERROR_EXIT; goto done; }
+            int draining = 0;
             ret = av_read_frame(format, packet);
             if (ret < 0) {
                 if (ret != AVERROR_EOF) goto done;
+                // 文件结束仍需取出解码器缓存的首帧；耗尽后明确失败，不能重复读 EOF 空转。
+                draining = 1;
                 ret = avcodec_send_packet(decoder, NULL);
             } else if (packet->stream_index == video) {
                 ret = avcodec_send_packet(decoder, packet);
             } else { av_packet_unref(packet); continue; }
             av_packet_unref(packet);
-            if (ret < 0 && ret != AVERROR(EAGAIN)) goto done;
+            if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) goto done;
             ret = avcodec_receive_frame(decoder, frame);
             if (ret == 0) got_frame = 1;
-            else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) goto done;
+            else if (ret == AVERROR_EOF || (draining && ret == AVERROR(EAGAIN))) {
+                ret = AVERROR_INVALIDDATA; goto done;
+            } else if (ret != AVERROR(EAGAIN)) goto done;
             if (tiny_probe_interrupt(&deadline)) { ret = AVERROR_EXIT; goto done; }
         }
         if (!got_frame) { ret = AVERROR_INVALIDDATA; goto done; }
+        // 晚起视频在流信息扫描结束时可能还没有像素格式，必须用已解码首帧补齐真实位深和色彩。
+        descriptor = av_pix_fmt_desc_get((enum AVPixelFormat)frame->format);
+        if (descriptor) depth = descriptor->comp[0].depth;
+        pixel = av_get_pix_fmt_name((enum AVPixelFormat)frame->format);
+        if (frame->color_primaries != AVCOL_PRI_UNSPECIFIED)
+            primaries = av_color_primaries_name(frame->color_primaries);
+        if (frame->color_trc != AVCOL_TRC_UNSPECIFIED)
+            transfer = av_color_transfer_name(frame->color_trc);
+        if (frame->colorspace != AVCOL_SPC_UNSPECIFIED)
+            space = av_color_space_name(frame->colorspace);
+        if (frame->color_range != AVCOL_RANGE_UNSPECIFIED)
+            range = av_color_range_name(frame->color_range);
         vivid = av_frame_get_side_data(frame, AV_FRAME_DATA_DYNAMIC_HDR_VIVID) != NULL;
         hdr_plus = av_frame_get_side_data(frame, AV_FRAME_DATA_DYNAMIC_HDR_PLUS) != NULL;
         dovi |= av_frame_get_side_data(frame, AV_FRAME_DATA_DOVI_METADATA) != NULL;
