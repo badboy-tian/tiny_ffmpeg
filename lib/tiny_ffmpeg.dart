@@ -1,43 +1,110 @@
 import 'dart:async';
-import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:tiny_ffmpeg/tiny_ffmpeg_cmd.dart';
+import 'package:tiny_ffmpeg/tiny_ffmpeg_media_info.dart';
+export 'package:tiny_ffmpeg/tiny_ffmpeg_media_info.dart';
 
 /// A Flutter plugin for executing FFmpeg commands.
 class TinyFfmpeg {
   static const MethodChannel _channel = MethodChannel('tiny_ffmpeg');
   static const EventChannel _eventChannel =
-  EventChannel("tiny_ffmpeg_progress_event");
-  static Stream listenProgress = _eventChannel.receiveBroadcastStream();
+      EventChannel("tiny_ffmpeg_progress_event");
+  // 全部消费者共用一次原生订阅，避免第二次 listen 替换正在接收结果的通道。
+  static final StreamController<dynamic> _events =
+      StreamController<dynamic>.broadcast(
+          onListen: _ensureEventChannelListening);
+  static Stream<dynamic> get listenProgress => _events.stream;
+  static StreamSubscription<dynamic>? _globalEventSubscription;
+  static final Map<String, TinyFfmpegSession> _sessions = {};
+  static final Map<String, Map<dynamic, dynamic>> _pendingResults = {};
+  static int _creatingSessions = 0;
 
-  // 全局事件监听器，确保 EventChannel 始终在监听
-  static StreamSubscription? _globalEventSubscription;
-  static final Map<String, Function(Map<dynamic, dynamic>)> _sessionHandlers =
-  {};
-  // 用于存储尚未注册 sessionId 的事件（防止竞态条件）
-  static final Map<String, List<Map<dynamic, dynamic>>> _pendingEvents =
-  <String, List<Map<dynamic, dynamic>>>{};
-
-  // 初始化全局事件监听（确保 EventChannel 已经建立连接）
   static void _ensureEventChannelListening() {
-    if (_globalEventSubscription == null) {
-      _globalEventSubscription =
-          _eventChannel.receiveBroadcastStream().listen((event) {
-            if (event is Map) {
-              final eventSessionId = event["sessionId"]?.toString();
-              if (eventSessionId != null && eventSessionId.isNotEmpty) {
-                // 优先查找已注册的处理器
-                if (_sessionHandlers.containsKey(eventSessionId)) {
-                  _sessionHandlers[eventSessionId]!(event);
-                } else {
-                  // 如果处理器尚未注册，将事件暂存
-                  _pendingEvents.putIfAbsent(eventSessionId, () => []).add(event);
-                }
-              }
+    _globalEventSubscription ??= _eventChannel.receiveBroadcastStream().listen(
+          (dynamic event) {
+            _events.add(event);
+            if (event is! Map || event['type'] != 'result') return;
+            final id = event['sessionId']?.toString();
+            if (id == null) return;
+            final session = _sessions[id];
+            if (session != null) {
+              session._setResult(
+                (event['code'] as num?)?.toInt() ?? -1,
+                event['message']?.toString() ?? '',
+                errorLog: event['errorLog']?.toString(),
+              );
+            } else if (_creatingSessions > 0 && _pendingResults.length < 64) {
+              // 只暂存创建窗口内的结果，取消任务的迟到事件不能无限堆积。
+              _pendingResults[id] = event;
             }
-          });
+          },
+          onError: (Object error) => _failRunningSessions(error.toString()),
+          onDone: () {
+            _globalEventSubscription = null;
+            _failRunningSessions('Native event channel closed');
+          },
+        );
+  }
+
+  static void _failRunningSessions(String message) {
+    for (final session in _sessions.values.toList()) {
+      session._setResult(-1, message);
     }
+    _pendingResults.clear();
+  }
+
+  /// Reads source properties on a native worker thread.
+  static Future<TinyFfmpegMediaInfo> getMediaInfo(String path) async {
+    final json = await _channel.invokeMethod<String>('getMediaInfo', path);
+    if (json == null) throw StateError('Native media probe returned no result');
+    final info = jsonDecode(json) as Map<String, dynamic>;
+    if (info.containsKey('error')) {
+      throw PlatformException(
+          code: 'MEDIA_ERROR',
+          message: 'Media probe failed (${info['error']})');
+    }
+    return TinyFfmpegMediaInfo.fromMap(info);
+  }
+
+  /// Creates a source-preserving MP4 command for executeAsync.
+  static Future<TinyFFmpegCMD> createExportCommand({
+    required String input,
+    required String output,
+    Duration start = Duration.zero,
+    Duration? duration,
+    TinyFfmpegCrop? crop,
+    bool lossless = true,
+    int crf = 18,
+    String preset = 'ultrafast',
+    int threads = 2,
+  }) async {
+    // 即使传入相对路径或符号链接，也不能覆盖正在读取的源视频。
+    final inputPath = await File(input).resolveSymbolicLinks();
+    final outputFile = File(output);
+    final outputPath = await outputFile.exists()
+        ? await outputFile.resolveSymbolicLinks()
+        : outputFile.absolute.path;
+    // 硬链接也可能指向同一源文件，路径字符串比较不足以保证输入安全。
+    if (inputPath == outputPath ||
+        (await outputFile.exists() &&
+            await FileSystemEntity.identical(inputPath, outputPath))) {
+      throw ArgumentError('Output must differ from input');
+    }
+    final info = await getMediaInfo(inputPath);
+    return info.exportCommand(
+      input: inputPath,
+      output: outputPath,
+      start: start,
+      duration: duration,
+      crop: crop,
+      lossless: lossless,
+      crf: crf,
+      preset: preset,
+      threads: threads,
+    );
   }
 
   /// Gets the duration of a media file.
@@ -78,69 +145,38 @@ class TinyFfmpeg {
   /// [cmd] The command builder containing the arguments.
   /// Returns a [TinyFfmpegSession] that can be used to cancel or get the result.
   static Future<TinyFfmpegSession> executeAsync(
-      TinyFFmpegCMD cmd,
-      ) async {
-    // 确保 EventChannel 已经在监听（必须在调用 invokeMapMethod 之前）
+    TinyFFmpegCMD cmd,
+  ) async {
     _ensureEventChannelListening();
-
-    var map = HashMap();
-    map["argc"] = cmd.build().length;
-    map["argv"] = cmd.build();
-
-    // 先调用 native 端获取 sessionId
-    Map<String, dynamic>? result =
-    await _channel.invokeMapMethod("executeFFmpegCommand", map);
-
-    final sessionId = result?["sessionId"];
-    if (sessionId == null) {
-      throw Exception("Failed to create session");
+    final arguments = List<String>.from(cmd.build());
+    _creatingSessions++;
+    try {
+      final result = await _channel.invokeMapMethod<String, dynamic>(
+        'executeFFmpegCommand',
+        {'argc': arguments.length, 'argv': arguments},
+      );
+      final id = result?['sessionId']?.toString();
+      if (id == null) throw StateError('Failed to create session');
+      final session = TinyFfmpegSession(id);
+      // 先安装清理函数再消费早到结果，避免极短任务留下已完成 Session。
+      session._onCancel = () {
+        _sessions.remove(id);
+        _pendingResults.remove(id);
+      };
+      _sessions[id] = session;
+      final pending = _pendingResults.remove(id);
+      if (pending != null) {
+        session._setResult(
+          (pending['code'] as num?)?.toInt() ?? -1,
+          pending['message']?.toString() ?? '',
+          errorLog: pending['errorLog']?.toString(),
+        );
+      }
+      return session;
+    } finally {
+      _creatingSessions--;
+      if (_creatingSessions == 0) _pendingResults.clear();
     }
-
-    final sessionIdString = sessionId.toString();
-
-    // 使用真实的 sessionId 创建 Session
-    final session = TinyFfmpegSession(sessionIdString);
-
-    // 定义事件处理器
-    void eventHandler(Map<dynamic, dynamic> event) {
-      final eventSessionId = event["sessionId"]?.toString();
-      // 只处理匹配当前 sessionId 的事件
-      if (eventSessionId != null && eventSessionId != sessionIdString) {
-        return; // 忽略其他 session 的事件
-      }
-
-      // 如果 session 已经完成，忽略后续事件
-      if (session.state != SessionState.running) {
-        return;
-      }
-
-      final type = event["type"]?.toString();
-      if (type == "result") {
-        final code = event["code"] as int? ?? -1;
-        final message = event["message"]?.toString() ?? "";
-        final errorLog = event["errorLog"]?.toString();  // 获取错误日志
-        session._setResult(code, message, errorLog: errorLog);
-      }
-    }
-
-    // 注册事件处理器
-    _sessionHandlers[sessionIdString] = eventHandler;
-
-    // 处理可能在注册之前到达的待处理事件
-    final pendingEvents = _pendingEvents.remove(sessionIdString);
-    if (pendingEvents != null) {
-      for (final event in pendingEvents) {
-        eventHandler(event);
-      }
-    }
-
-    // 设置取消时的清理
-    session._onCancel = () {
-      _sessionHandlers.remove(sessionIdString);
-      _pendingEvents.remove(sessionIdString); // 清理待处理事件
-    };
-
-    return session;
   }
 }
 
@@ -151,10 +187,10 @@ class TinyFfmpegSession {
   SessionState _state = SessionState.running;
   int? _returnCode;
   String? _failStackTrace;
-  String? _errorLog;  // 存储从原生层返回的完整错误日志
-  StreamSubscription? _subscription;
+  String? _errorLog; // 存储从原生层返回的完整错误日志
+  Future<void>? _cancelFuture;
   final Completer<TinyFfmpegResult?> _resultCompleter =
-  Completer<TinyFfmpegResult?>();
+      Completer<TinyFfmpegResult?>();
   VoidCallback? _onCancel;
 
   TinyFfmpegSession(this._sessionId);
@@ -165,38 +201,29 @@ class TinyFfmpegSession {
   int? get returnCode => _returnCode;
   String? get failStackTrace => _failStackTrace;
 
-  /// Cancels the FFmpeg command execution.
-  Future<void> cancel() async {
+  /// Cancels execution and resolves every existing result waiter.
+  Future<void> cancel() {
+    if (_cancelFuture != null) return _cancelFuture!;
     if (_state == SessionState.completed || _state == SessionState.failed) {
-      return;
+      return Future<void>.value();
     }
+    // 先完成 Dart 等待者，原生释放仍由执行线程退出后的终态路径负责。
     _state = SessionState.cancelled;
-    await _subscription?.cancel();
-    _onCancel?.call(); // 清理事件处理器
-    await TinyFfmpeg._channel
-        .invokeMethod("cancelSession", {"sessionId": int.parse(sessionId)});
+    _returnCode = -1;
+    _failStackTrace = 'Command was cancelled';
+    _resultCompleter.complete(
+      TinyFfmpegResult('cancelled', -1, _failStackTrace!),
+    );
+    _onCancel?.call();
+    _cancelFuture = TinyFfmpeg._channel.invokeMethod<void>(
+      'cancelSession',
+      {'sessionId': int.parse(sessionId)},
+    );
+    return _cancelFuture!;
   }
 
-  /// Gets the execution result. Returns null if the command is still running or was cancelled.
-  Future<TinyFfmpegResult?> getResult() async {
-    if (_state == SessionState.idle || _state == SessionState.running) {
-      return await _resultCompleter.future;
-    }
-
-    if (_state == SessionState.cancelled) {
-      return TinyFfmpegResult("cancelled", -1, "Command was cancelled");
-    }
-
-    if (_returnCode != null) {
-      return TinyFfmpegResult(
-        _state == SessionState.completed ? "success" : "error",
-        _returnCode!,
-        _failStackTrace ?? "",
-      );
-    }
-
-    return null;
-  }
+  /// Returns the same terminal result to current and subsequent waiters.
+  Future<TinyFfmpegResult?> getResult() => _resultCompleter.future;
 
   /// Gets the detailed error message for this session.
   /// 优先返回从 result 事件中获取的 errorLog（因为 session 可能已被销毁）
@@ -214,9 +241,11 @@ class TinyFfmpegSession {
   }
 
   void _setResult(int code, String message, {String? errorLog}) {
+    // 取消与原生完成可能交错，终态只能完成一次。
+    if (_resultCompleter.isCompleted) return;
     _returnCode = code;
     _failStackTrace = message;
-    _errorLog = errorLog;  // 保存错误日志
+    _errorLog = errorLog; // 保存错误日志
     if (code == 0) {
       _state = SessionState.completed;
     } else {
@@ -229,7 +258,6 @@ class TinyFfmpegSession {
         message,
       ));
     }
-    _subscription?.cancel();
     _onCancel?.call(); // 清理事件处理器
   }
 }

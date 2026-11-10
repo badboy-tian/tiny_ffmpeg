@@ -22,7 +22,7 @@
 
 #include "ffmpeg.h"
 #include "ffmpeg_mux.h"
-#include "ffmpeg_utils.h"
+#include "fftools_utils.h"
 #include "sync_queue.h"
 
 #include "libavutil/avstring.h"
@@ -138,11 +138,6 @@ static void mux_log_debug_ts(OutputStream *ost, const AVPacket *pkt)
 static int mux_fixup_ts(Muxer *mux, MuxStream *ms, AVPacket *pkt)
 {
     OutputStream *ost = &ms->ost;
-
-#if FFMPEG_OPT_VSYNC_DROP
-    if (ost->type == AVMEDIA_TYPE_VIDEO && ms->ts_drop)
-        pkt->pts = pkt->dts = AV_NOPTS_VALUE;
-#endif
 
     // rescale timestamps to the stream timebase
     if (ost->type == AVMEDIA_TYPE_AUDIO && !ost->enc) {

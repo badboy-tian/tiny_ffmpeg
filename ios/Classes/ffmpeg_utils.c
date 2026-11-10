@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdbool.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include <string.h>
 
 #include "ffmpeg_utils.h"
 #include "ffmpeg.h"
 #include "ffmpeg_cmd.h"
+// 三端统一探测和未知时长的约定。
+#include "tiny_media_info.h"
 
 #define LOG_TAG "FFMpegUtils"
 
@@ -24,7 +28,8 @@ void Java_com_i7play_tiny_ffmpeg_FFMpegUtils_progressMessage(
 static CallBackInfo *g_currentCallbackInfo = NULL;
 
 // 全局变量控制是否输出日志到控制台（默认开启）
-static bool g_logEnabled = false;
+// 日志开关可在编码期间切换，使用原子变量避免跨线程数据竞争。
+static atomic_bool g_logEnabled = false;
 
 // 声明 Session 管理函数
 extern void appendSessionErrorMessage(int64_t sessionId, const char *message);
@@ -157,9 +162,12 @@ void progressCallBack(int64_t handle, int what, float progress) {
 // 新增：通过 sessionId 执行命令
 int64_t Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommandWithSession(
     int64_t sessionId, int cmdLen, char *argv[], long totalTime) {
+  static pthread_mutex_t executionLock = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&executionLock);
   int ret = 0;
 
-  for (int i = 0; i < cmdLen; ++i) {
+  // 参数可能包含用户文件路径，只在显式开启日志时输出。
+  for (int i = 0; g_logEnabled && i < cmdLen; ++i) {
     LOGE("argCmd=%s\n", argv[i]);
   }
 
@@ -205,7 +213,7 @@ int64_t Java_com_i7play_tiny_ffmpeg_FFMpegUtils_executeFFmpegCommandWithSession(
   }
 
   Java_com_i7play_tiny_ffmpeg_FFMpegUtils_result(sessionId, ret, fullErrorMsg);
-
+  pthread_mutex_unlock(&executionLock);
   return ret;
 }
 
@@ -241,43 +249,14 @@ void Java_com_i7play_tiny_ffmpeg_FFMpegUtils_setLogEnabled(int enabled) {
   g_logEnabled = (enabled != 0);
 }
 
-long Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getMediaDuration(
-    const char *mediaPath) {
-  if (NULL == mediaPath) {
-    return -1;
-  }
-  // iOS: 新版 FFmpeg 会自动注册，不需要手动调用
-  // if (!hasRegistered) {
-  //   av_register_all();
-  //   avcodec_register_all();
-  //   avfilter_register_all();
-  //   avformat_network_init();
-  //   hasRegistered = true;
-  // }
-  // const char *mediaPath = env->GetStringUTFChars(media_path, 0);
-  AVFormatContext *in_fmt_ctx = NULL;
-  int ret = 0;
-  if ((ret = avformat_open_input(&in_fmt_ctx, mediaPath, NULL, NULL)) < 0) {
-    av_log(NULL, AV_LOG_ERROR, "Cannot open input file mediaPath=%s",
-           mediaPath);
-    return ret;
-  }
-  if ((ret = avformat_find_stream_info(in_fmt_ctx, NULL)) < 0) {
-    av_log(NULL, AV_LOG_ERROR, "Cannot find stream information\n");
-    return ret;
-  }
-  int64_t videoDuration = 0;
-  for (int i = 0; i < in_fmt_ctx->nb_streams; i++) {
-    AVStream *stream;
-    stream = in_fmt_ctx->streams[i];
-    int64_t temp =
-        stream->duration * 1000 * stream->time_base.num / stream->time_base.den;
-    if (temp > videoDuration)
-      videoDuration = temp;
-  }
-  if (NULL != in_fmt_ctx)
-    avformat_close_input(&in_fmt_ctx);
+const char *Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getMediaInfo(const char *path) {
+  // Swift 在调用线程立即复制结果，线程局部存储避免并发探测覆盖缓冲区。
+  static _Thread_local char json[2048];
+  tiny_media_info(path, json, sizeof(json));
+  return json;
+}
 
-  // env->ReleaseStringUTFChars(media_path, mediaPath);
-  return videoDuration;
+long Java_com_i7play_tiny_ffmpeg_FFMpegUtils_getMediaDuration(const char *path) {
+  // 复用同一实现和读取超时，保持三端毫秒时长一致。
+  return tiny_media_duration(path);
 }

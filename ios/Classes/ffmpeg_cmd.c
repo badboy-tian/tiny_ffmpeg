@@ -6,8 +6,8 @@
 #include "ffmpeg_cmd.h"
 
 //保证同时只能一个线程执行
-static pthread_mutex_t cmdLock;
-static int cmdLockHasInit = 0;
+// 插件可同时收到多个 Session 请求，静态初始化避免首次执行时重复初始化锁。
+static pthread_mutex_t cmdLock = PTHREAD_MUTEX_INITIALIZER;
 // bool hasRegistered = false;  // iOS: 新版 FFmpeg 不需要手动注册
 
 // Session 管理
@@ -59,6 +59,9 @@ int cancelFFmpegCommandBySession(int64_t sessionId) {
     for (int i = 0; i < MAX_SESSIONS; i++) {
         if (sessions[i].inUse && sessions[i].sessionId == sessionId) {
             sessions[i].cancelled = 1;
+            // 只有匹配当前 Session 时才中断 FFmpeg，避免取消排队任务时误停正在执行的命令。
+            if (get_ffmpeg_current_session_id() == sessionId)
+                cancel_ffmpeg_cmd();
             pthread_mutex_unlock(&sessionsLock);
             return 0;
         }
@@ -150,11 +153,6 @@ int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv,
     //     avformat_network_init();
     //     hasRegistered = true;
     // }
-    if (!cmdLockHasInit) {
-        pthread_mutex_init(&cmdLock, NULL);
-        cmdLockHasInit = 1;
-    }
-    
     pthread_mutex_lock(&cmdLock);
 
     setCurrentExecutingSessionId(sessionId);

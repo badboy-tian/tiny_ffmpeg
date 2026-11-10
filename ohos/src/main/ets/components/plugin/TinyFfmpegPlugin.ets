@@ -44,6 +44,13 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
   }
 
   onDetachedFromEngine(binding: FlutterPluginBinding): void {
+    // Engine 退出先请求取消，Session 仍由原生工作线程返回后释放。
+    this.eventSink = null;
+    this.pendingResults.clear();
+    for (const session of this.sessions.values()) {
+      session.isCancelled = true;
+      ffmpegutils.cancelFFmpegCommandBySession(session.sessionId);
+    }
     if (this.channel != null) {
       this.channel.setMethodCallHandler(null);
       this.channel = null;
@@ -60,6 +67,11 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
       case "executeFFmpegCommand":
         const args = call.argument("argv") as Array<string>;
         
+        // 参数错误应通过通道返回，避免数组边界错误进入原生代码。
+        if (!args || args.length == 0 || call.argument("argc") != args.length) {
+          result.error("ARGUMENT_ERROR", "argc must match a nonempty argv", null);
+          break;
+        }
         // 创建 Session
         const sessionId = ffmpegutils.createFFmpegSession() as number;
         if (sessionId < 0) {
@@ -80,9 +92,11 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
         
         const uuid = "ffmpeg_cmd_" + sessionId + "_" + new Date().getTime();
         
-        // 绑定回调函数，用于接收 native 层进度的回调（保留用于兼容，但不发送事件）
-        ffmpegutils.JSBind.bindFunction(uuid + "_onFFmpegProgress", (time: number, size: number, bitrate: number, speed: number) => {
-             // 不再发送 progress 事件
+        // 使用结构化进度，不依赖 showLog 开关或日志文本格式。
+        ffmpegutils.JSBind.bindFunction(uuid + "_onFFmpegProgress", (time: number, size: number, speed: number) => {
+          if (this.eventSink && this.sessions.has(sessionId)) {
+            this.eventSink.success({ type: "progress", sessionId: sessionId, time: time, size: size, speed: speed });
+          }
         });
 
         // 调用 C++ 端的 executeFFmpegCommandWithSession 方法
@@ -114,12 +128,28 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
                     // 如果 eventSink 还没有设置，缓存结果，等 onListen 时再发送
                     this.pendingResults.set(sessionId, resultMap);
                 }
-                if (session.result) {
-                    session.result.success(resultMap);
-                }
+                // MethodChannel 已返回 sessionId，执行结果通过 EventChannel 完成一次通知。
+                this.sessions.delete(sessionId);
+                ffmpegutils.destroyFFmpegSession(sessionId);
+            } else if (session) {
+                // 取消后也要等原生线程退出再释放 Session，避免槽位被提前复用。
                 this.sessions.delete(sessionId);
                 ffmpegutils.destroyFFmpegSession(sessionId);
             }
+        }).catch((error: Error) => {
+          // Promise 异常也必须完成等待者，不能留下永久运行的 Session。
+          const failure: Record<string, Object> = {};
+          failure["type"] = "result";
+          failure["sessionId"] = sessionId;
+          failure["code"] = -1;
+          failure["message"] = error.message;
+          if (this.eventSink) this.eventSink.success(failure);
+          else this.pendingResults.set(sessionId, failure);
+          this.sessions.delete(sessionId);
+          ffmpegutils.destroyFFmpegSession(sessionId);
+        }).finally(() => {
+          // 每次命令使用独立回调名，完成后解绑以免长时间使用累积闭包。
+          ffmpegutils.releaseFFmpegCallback(uuid + "_onFFmpegProgress");
         });
         break;
       case "cancelSession":
@@ -148,7 +178,15 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
         result.success(errorMsg || "");
         break;
       case "getMediaDuration":
-        result.success(0);
+        // 时长查询走轻量接口，兼容纯音频和没有启用视频解码器的文件。
+        ffmpegutils.getMediaDuration(call.args as string).then((duration: number) => result.success(duration))
+          .catch((error: Error) => result.error("MEDIA_ERROR", error.message, null));
+        break;
+      case "getMediaInfo":
+        // 与 Android/iOS 一样返回毫秒，未知时长保留 -1。
+        ffmpegutils.getMediaInfo(call.args as string).then((json: string) => {
+          result.success(json);
+        }).catch((error: Error) => result.error("MEDIA_ERROR", error.message, null));
         break;
       case "showLog":
         const show = (call.argument("show") as boolean) ?? true;

@@ -48,6 +48,8 @@ android {
 
     defaultConfig {
         minSdk 21
+        // JNI 按固定名称查找桥接类和进度回调，宿主开启混淆时也必须保留。
+        consumerProguardFiles 'consumer-rules.pro'
         externalNativeBuild {
             cmake {
                 cppFlags ''

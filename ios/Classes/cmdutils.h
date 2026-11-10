@@ -23,7 +23,6 @@
 #define FFTOOLS_CMDUTILS_H
 
 #include <stdint.h>
-#include <time.h>
 
 #include "config.h"
 #include "libavcodec/avcodec.h"
@@ -158,6 +157,10 @@ int stream_specifier_parse(StreamSpecifier *ss, const char *spec,
 unsigned stream_specifier_match(const StreamSpecifier *ss,
                                 const AVFormatContext *s, const AVStream *st,
                                 void *logctx);
+
+unsigned stream_group_specifier_match(const StreamSpecifier *ss,
+                                      const AVFormatContext *s, const AVStreamGroup *stg,
+                                      void *logctx);
 
 void stream_specifier_uninit(StreamSpecifier *ss);
 
@@ -536,7 +539,7 @@ void *allocate_array_elem(void *array, size_t elem_size, int *nb_elems);
 double get_rotation(const int32_t *displaymatrix);
 
 /* read file contents into a string */
-char *file_read(const char *filename);
+char *read_file_to_string(const char *filename);
 
 /* Remove keys in dictionary b from dictionary a */
 void remove_avoptions(AVDictionary **a, AVDictionary *b);
@@ -545,5 +548,13 @@ void remove_avoptions(AVDictionary **a, AVDictionary *b);
 int check_avoptions(AVDictionary *m);
 
 int cmdutils_isalnum(char c);
+
+/**
+ * This does the same as libavformat/dump.c corresponding function
+ * and should probably be kept in sync when the other one changes.
+ */
+void dump_dictionary(void *ctx, const AVDictionary *m,
+                     const char *name, const char *indent,
+                     int log_level);
 
 #endif /* FFTOOLS_CMDUTILS_H */

@@ -11,3 +11,5 @@ build/
 *.lock
 
 .history/
+# 本地选择的鸿蒙依赖覆盖文件由模板生成，避免污染标准 Flutter 构建。
+/example/pubspec_overrides.yaml

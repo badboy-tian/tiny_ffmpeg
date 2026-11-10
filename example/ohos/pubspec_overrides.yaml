@@ -1,0 +1,14 @@
+# 鸿蒙 Flutter 扩展了 TargetPlatform.ohos，这些依赖只用于鸿蒙 SDK。
+# 在 example 目录复制为 pubspec_overrides.yaml 后执行鸿蒙 flutter pub get。
+dependency_overrides:
+  audioplayers:
+    git:
+      url: https://gitcode.com/CPF-Flutter/flutter_audioplayers.git
+      path: packages/audioplayers
+      ref: b853cdafdef1549be31b478a954f6d8b36d314e6
+  path_provider:
+    git:
+      url: https://gitcode.com/openharmony-sig/flutter_packages.git
+      path: packages/path_provider/path_provider
+      ref: 4ef399d82d6a9800abaa2e5fc6a1da0db37388cc
+  file: 7.0.0

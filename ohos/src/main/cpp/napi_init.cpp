@@ -1,5 +1,6 @@
 #include <aki/jsbind.h>
 #include <cstdio>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -13,11 +14,13 @@
 #define LOG_TAG "tiny_ffmpeg" // 全局tag宏，标识模块日志tag
 
 extern "C" {
-#include "ffmpeg/ffmpeg.h"
+// FFmpeg 前端结构使用 C 语言字段名，C++ 桥接层只依赖下方声明的 Session 接口。
 #include "libavfilter/avfilter.h"
 #include "libavformat/avformat.h"
 #include "libavutil/error.h"
 #include "libavutil/log.h"
+// 统一三端探测结果，避免鸿蒙时长和 HDR 识别落后于其他平台。
+#include "tiny_media_info.h"
 // int exe_ffmpeg_cmd(int argc, char **argv,
 //                    int64_t handle, void (*progressCallBack)(int64_t, int,
 //                    float), int64_t totalTime);
@@ -85,6 +88,8 @@ static SessionContext sessions[MAX_SESSIONS];
 static std::mutex sessionsMutex;
 static int64_t nextSessionId = 1;
 static int64_t currentExecutingSessionId = 0;
+// FFmpeg 前端包含全局选项，AKI 工作线程必须串行执行命令才能安全复用。
+static std::mutex ffmpegExecutionMutex;
 
 int64_t createFFmpegSession() {
   std::lock_guard<std::mutex> lock(sessionsMutex);
@@ -308,9 +313,40 @@ void log_call_back_with_callback(void *ptr, int level, const char *fmt,
   }
 }
 
+// FFmpeg 前端在执行线程中报告进度，AKI 将回调安全投递到 ArkTS。
+extern "C" void tiny_ffmpeg_report_progress(int64_t id, int64_t time, int64_t size, double speed) {
+  const aki::JSFunction *callback = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(sessionsMutex);
+    for (auto &session : sessions) {
+      if (session.inUse && session.sessionId == id) {
+        callback = session.callbackInfo.onFFmpegProgress;
+        break;
+      }
+    }
+  }
+  if (callback) callback->Invoke<void>((double)(time / 1000), (double)size, speed);
+}
+
+// 时长查询无需解码首帧，兼容音频文件和仅可探测的输入格式。
+int64_t getMediaDuration(std::string path) {
+  return tiny_media_duration(path.c_str());
+}
+
+std::string getMediaInfo(std::string path) {
+  char json[2048];
+  tiny_media_info(path.c_str(), json, sizeof(json));
+  return std::string(json);
+}
+
 // 新增：通过 sessionId 执行命令
 int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
                                     int cmdLen, std::vector<std::string> argv) {
+  std::lock_guard<std::mutex> executionLock(ffmpegExecutionMutex);
+  // 等待上一条命令时也可能被取消，不能在取得锁后清除取消状态并继续编码。
+  if (isSessionCancelled(sessionId)) {
+    return AVERROR_EXIT;
+  }
   char **argv1 = vector_to_argv(argv);
 
   setCurrentExecutingSessionId(sessionId);
@@ -323,7 +359,7 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
         std::lock_guard<std::mutex> errorLock(sessions[i].errorMutex);
         sessions[i].errorBuffer[0] = '\0';
         sessions[i].errorBufferLen = 0;
-        sessions[i].cancelled = 0;
+        // 执行阶段保留已提交的取消状态。
         break;
       }
     }
@@ -338,7 +374,7 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
         sessions[i].callbackInfo.onFFmpegProgress =
             aki::JSBind::GetJSFunction(uuid + "_onFFmpegProgress");
         sessions[i].callbackInfo.hasLogCallback = false;
-        sessions[i].callbackInfo.hasProgressCallback = false;
+        sessions[i].callbackInfo.hasProgressCallback = true;
         sessions[i].callbackInfo.sessionId = sessionId;
         sessions[i].callbackInfo.onFFmpegLog = nullptr;
         sessions[i].callbackInfo.onFFmpegProgressMessage = nullptr;
@@ -371,7 +407,10 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
                    "Error description: %s\n"
                    "Note: No detailed error log was captured.\n",
                    ret, errMsg);
-          appendSessionErrorMessage(sessionId, defaultError);
+          // 当前已持有两把 Session 锁，直接写入以避免再次加锁造成死锁。
+          snprintf(sessions[i].errorBuffer, sizeof(sessions[i].errorBuffer),
+                   "%s", defaultError);
+          sessions[i].errorBufferLen = strlen(sessions[i].errorBuffer);
         }
         break;
       }
@@ -408,6 +447,11 @@ void setLogEnabled(bool enabled) {
   g_logEnabled = enabled;
 }
 
+// JS 引用在 ArkTS 调用线程解绑，避免把每条命令的闭包留在 AKI 注册表中。
+void releaseFFmpegCallback(std::string name) {
+  aki::JSBind::unbindFunction(name);
+}
+
 JSBIND_ADDON(ffmpegutils)
 
 JSBIND_GLOBAL() {
@@ -417,4 +461,7 @@ JSBIND_GLOBAL() {
   JSBIND_FUNCTION(getSessionErrorMessage);
   JSBIND_FUNCTION(destroyFFmpegSession);
   JSBIND_FUNCTION(setLogEnabled);
+  JSBIND_FUNCTION(releaseFFmpegCallback);
+  JSBIND_PFUNCTION(getMediaInfo);
+  JSBIND_PFUNCTION(getMediaDuration);
 }

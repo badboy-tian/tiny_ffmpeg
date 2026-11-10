@@ -64,7 +64,7 @@ void uninit_opts(void);
  * Trivial log callback.
  * Only suitable for opt_help and similar since it lacks prefix handling.
  */
-void log_callback_help(void *ptr, int level, const char *fmt, va_list vl);
+void log_callback_help(void* ptr, int level, const char* fmt, va_list vl);
 
 /**
  * Fallback for options that are not explicitly handled, these will be
@@ -78,14 +78,14 @@ int opt_default(void *optctx, const char *opt, const char *arg);
 int opt_timelimit(void *optctx, const char *opt, const char *arg);
 
 enum OptionType {
-  OPT_TYPE_FUNC,
-  OPT_TYPE_BOOL,
-  OPT_TYPE_STRING,
-  OPT_TYPE_INT,
-  OPT_TYPE_INT64,
-  OPT_TYPE_FLOAT,
-  OPT_TYPE_DOUBLE,
-  OPT_TYPE_TIME,
+    OPT_TYPE_FUNC,
+    OPT_TYPE_BOOL,
+    OPT_TYPE_STRING,
+    OPT_TYPE_INT,
+    OPT_TYPE_INT64,
+    OPT_TYPE_FLOAT,
+    OPT_TYPE_DOUBLE,
+    OPT_TYPE_TIME,
 };
 
 /**
@@ -103,39 +103,39 @@ int parse_number(const char *context, const char *numstr, enum OptionType type,
                  double min, double max, double *dst);
 
 enum StreamList {
-  STREAM_LIST_ALL,
-  STREAM_LIST_STREAM_ID,
-  STREAM_LIST_PROGRAM,
-  STREAM_LIST_GROUP_ID,
-  STREAM_LIST_GROUP_IDX,
+    STREAM_LIST_ALL,
+    STREAM_LIST_STREAM_ID,
+    STREAM_LIST_PROGRAM,
+    STREAM_LIST_GROUP_ID,
+    STREAM_LIST_GROUP_IDX,
 };
 
 typedef struct StreamSpecifier {
-  // trailing stream index - pick idx-th stream that matches
-  // all the other constraints; -1 when not present
-  int idx;
+    // trailing stream index - pick idx-th stream that matches
+    // all the other constraints; -1 when not present
+    int                  idx;
 
-  // which stream list to consider
-  enum StreamList stream_list;
+    // which stream list to consider
+    enum StreamList      stream_list;
 
-  // STREAM_LIST_STREAM_ID: stream ID
-  // STREAM_LIST_GROUP_IDX: group index
-  // STREAM_LIST_GROUP_ID:  group ID
-  // STREAM_LIST_PROGRAM:   program ID
-  int64_t list_id;
+    // STREAM_LIST_STREAM_ID: stream ID
+    // STREAM_LIST_GROUP_IDX: group index
+    // STREAM_LIST_GROUP_ID:  group ID
+    // STREAM_LIST_PROGRAM:   program ID
+    int64_t              list_id;
 
-  // when not AVMEDIA_TYPE_UNKNOWN, consider only streams of this type
-  enum AVMediaType media_type;
-  uint8_t no_apic;
+    // when not AVMEDIA_TYPE_UNKNOWN, consider only streams of this type
+    enum AVMediaType     media_type;
+    uint8_t              no_apic;
 
-  uint8_t usable_only;
+    uint8_t              usable_only;
 
-  int disposition;
+    int                  disposition;
 
-  char *meta_key;
-  char *meta_val;
+    char                *meta_key;
+    char                *meta_val;
 
-  char *remainder;
+    char                *remainder;
 } StreamSpecifier;
 
 /**
@@ -158,107 +158,111 @@ unsigned stream_specifier_match(const StreamSpecifier *ss,
                                 const AVFormatContext *s, const AVStream *st,
                                 void *logctx);
 
+unsigned stream_group_specifier_match(const StreamSpecifier *ss,
+                                      const AVFormatContext *s, const AVStreamGroup *stg,
+                                      void *logctx);
+
 void stream_specifier_uninit(StreamSpecifier *ss);
 
 typedef struct SpecifierOpt {
-  // original specifier or empty string
-  char *specifier;
-  // parsed specifier for OPT_FLAG_PERSTREAM options
-  StreamSpecifier stream_spec;
+    // original specifier or empty string
+    char            *specifier;
+    // parsed specifier for OPT_FLAG_PERSTREAM options
+    StreamSpecifier  stream_spec;
 
-  union {
-    uint8_t *str;
-    int i;
-    int64_t i64;
-    uint64_t ui64;
-    float f;
-    double dbl;
-  } u;
+    union {
+        uint8_t *str;
+        int        i;
+        int64_t  i64;
+        uint64_t ui64;
+        float      f;
+        double   dbl;
+    } u;
 } SpecifierOpt;
 
 typedef struct SpecifierOptList {
-  SpecifierOpt *opt;
-  int nb_opt;
+    SpecifierOpt    *opt;
+    int           nb_opt;
 
-  /* Canonical option definition that was parsed into this list. */
-  const struct OptionDef *opt_canon;
-  /* Type corresponding to the field that should be used from SpecifierOpt.u.
-   * May not match the option type, e.g. OPT_TYPE_BOOL options are stored as
-   * int, so this field would be OPT_TYPE_INT for them */
-  enum OptionType type;
+    /* Canonical option definition that was parsed into this list. */
+    const struct OptionDef *opt_canon;
+    /* Type corresponding to the field that should be used from SpecifierOpt.u.
+     * May not match the option type, e.g. OPT_TYPE_BOOL options are stored as
+     * int, so this field would be OPT_TYPE_INT for them */
+    enum OptionType type;
 } SpecifierOptList;
 
 typedef struct OptionDef {
-  const char *name;
-  enum OptionType type;
-  int flags;
+    const char *name;
+    enum OptionType type;
+    int flags;
 
 /* The OPT_TYPE_FUNC option takes an argument.
  * Must not be used with other option types, as for those it holds:
  * - OPT_TYPE_BOOL do not take an argument
  * - all other types do
  */
-#define OPT_FUNC_ARG (1 << 0)
+#define OPT_FUNC_ARG    (1 << 0)
 /* Program will immediately exit after processing this option */
-#define OPT_EXIT (1 << 1)
+#define OPT_EXIT        (1 << 1)
 /* Option is intended for advanced users. Only affects
  * help output.
  */
-#define OPT_EXPERT (1 << 2)
-#define OPT_VIDEO (1 << 3)
-#define OPT_AUDIO (1 << 4)
-#define OPT_SUBTITLE (1 << 5)
-#define OPT_DATA (1 << 6)
+#define OPT_EXPERT      (1 << 2)
+#define OPT_VIDEO       (1 << 3)
+#define OPT_AUDIO       (1 << 4)
+#define OPT_SUBTITLE    (1 << 5)
+#define OPT_DATA        (1 << 6)
 /* The option is per-file (currently ffmpeg-only). At least one of OPT_INPUT,
  * OPT_OUTPUT, OPT_DECODER must be set when this flag is in use.
- */
-#define OPT_PERFILE (1 << 7)
+   */
+#define OPT_PERFILE     (1 << 7)
 
 /* Option is specified as an offset in a passed optctx.
  * Always use as OPT_OFFSET in option definitions. */
 #define OPT_FLAG_OFFSET (1 << 8)
-#define OPT_OFFSET (OPT_FLAG_OFFSET | OPT_PERFILE)
+#define OPT_OFFSET      (OPT_FLAG_OFFSET | OPT_PERFILE)
 
 /* Option is to be stored in a SpecifierOptList.
    Always use as OPT_SPEC in option definitions. */
-#define OPT_FLAG_SPEC (1 << 9)
-#define OPT_SPEC (OPT_FLAG_SPEC | OPT_OFFSET)
+#define OPT_FLAG_SPEC   (1 << 9)
+#define OPT_SPEC        (OPT_FLAG_SPEC | OPT_OFFSET)
 
 /* Option applies per-stream (implies OPT_SPEC). */
-#define OPT_FLAG_PERSTREAM (1 << 10)
-#define OPT_PERSTREAM (OPT_FLAG_PERSTREAM | OPT_SPEC)
+#define OPT_FLAG_PERSTREAM  (1 << 10)
+#define OPT_PERSTREAM   (OPT_FLAG_PERSTREAM | OPT_SPEC)
 
 /* ffmpeg-only - specifies whether an OPT_PERFILE option applies to input,
  * output, or both. */
-#define OPT_INPUT (1 << 11)
-#define OPT_OUTPUT (1 << 12)
+#define OPT_INPUT       (1 << 11)
+#define OPT_OUTPUT      (1 << 12)
 
 /* This option is a "canonical" form, to which one or more alternatives
  * exist. These alternatives are listed in u1.names_alt. */
-#define OPT_HAS_ALT (1 << 13)
+#define OPT_HAS_ALT     (1 << 13)
 /* This option is an alternative form of some other option, whose
  * name is stored in u1.name_canon */
-#define OPT_HAS_CANON (1 << 14)
+#define OPT_HAS_CANON   (1 << 14)
 
 /* ffmpeg-only - OPT_PERFILE may apply to standalone decoders */
-#define OPT_DECODER (1 << 15)
+#define OPT_DECODER     (1 << 15)
 
-  union {
-    void *dst_ptr;
-    int (*func_arg)(void *, const char *, const char *);
-    size_t off;
-  } u;
-  const char *help;
-  const char *argname;
+     union {
+        void *dst_ptr;
+        int (*func_arg)(void *, const char *, const char *);
+        size_t off;
+    } u;
+    const char *help;
+    const char *argname;
 
-  union {
-    /* Name of the canonical form of this option.
-     * Is valid when OPT_HAS_CANON is set. */
-    const char *name_canon;
-    /* A NULL-terminated list of alternate forms of this option.
-     * Is valid when OPT_HAS_ALT is set. */
-    const char *const *names_alt;
-  } u1;
+    union {
+        /* Name of the canonical form of this option.
+         * Is valid when OPT_HAS_CANON is set. */
+        const char *name_canon;
+        /* A NULL-terminated list of alternate forms of this option.
+         * Is valid when OPT_HAS_ALT is set. */
+        const char * const *names_alt;
+    } u1;
 } OptionDef;
 
 /**
@@ -276,7 +280,7 @@ void show_help_options(const OptionDef *options, const char *msg, int req_flags,
  * Show help for all options with given flags in class and all its
  * children.
  */
-void show_help_children(const AVClass *av_class, int flags);
+void show_help_children(const AVClass *class, int flags);
 
 /**
  * Per-fftool specific help handler. Implemented in each
@@ -297,13 +301,12 @@ void show_help_default(const char *opt, const char *arg);
  * not have to be processed.
  */
 int parse_options(void *optctx, int argc, char **argv, const OptionDef *options,
-                  int (*parse_arg_function)(void *optctx, const char *));
+                  int (* parse_arg_function)(void *optctx, const char*));
 
 /**
  * Parse one given option.
  *
- * @return on success 1 if arg was consumed, 0 otherwise; negative number on
- * error
+ * @return on success 1 if arg was consumed, 0 otherwise; negative number on error
  */
 int parse_option(void *optctx, const char *opt, const char *arg,
                  const OptionDef *options);
@@ -314,37 +317,37 @@ int parse_option(void *optctx, const char *opt, const char *arg,
  * used multiple times.
  */
 typedef struct Option {
-  const OptionDef *opt;
-  const char *key;
-  const char *val;
+    const OptionDef  *opt;
+    const char       *key;
+    const char       *val;
 } Option;
 
 typedef struct OptionGroupDef {
-  /** group name */
-  const char *name;
-  /**
-   * Option to be used as group separator. Can be NULL for groups which
-   * are terminated by a non-option argument (e.g. ffmpeg output files)
-   */
-  const char *sep;
-  /**
-   * Option flags that must be set on each option that is
-   * applied to this group
-   */
-  int flags;
+    /** group name */
+    const char *name;
+    /**
+     * Option to be used as group separator. Can be NULL for groups which
+     * are terminated by a non-option argument (e.g. ffmpeg output files)
+     */
+    const char *sep;
+    /**
+     * Option flags that must be set on each option that is
+     * applied to this group
+     */
+    int flags;
 } OptionGroupDef;
 
 typedef struct OptionGroup {
-  const OptionGroupDef *group_def;
-  const char *arg;
+    const OptionGroupDef *group_def;
+    const char *arg;
 
-  Option *opts;
-  int nb_opts;
+    Option *opts;
+    int  nb_opts;
 
-  AVDictionary *codec_opts;
-  AVDictionary *format_opts;
-  AVDictionary *sws_dict;
-  AVDictionary *swr_opts;
+    AVDictionary *codec_opts;
+    AVDictionary *format_opts;
+    AVDictionary *sws_dict;
+    AVDictionary *swr_opts;
 } OptionGroup;
 
 /**
@@ -352,20 +355,20 @@ typedef struct OptionGroup {
  * (e.g. input files or output files)
  */
 typedef struct OptionGroupList {
-  const OptionGroupDef *group_def;
+    const OptionGroupDef *group_def;
 
-  OptionGroup *groups;
-  int nb_groups;
+    OptionGroup *groups;
+    int       nb_groups;
 } OptionGroupList;
 
 typedef struct OptionParseContext {
-  OptionGroup global_opts;
+    OptionGroup global_opts;
 
-  OptionGroupList *groups;
-  int nb_groups;
+    OptionGroupList *groups;
+    int           nb_groups;
 
-  /* parsing state */
-  OptionGroup cur_group;
+    /* parsing state */
+    OptionGroup cur_group;
 } OptionParseContext;
 
 /**
@@ -394,8 +397,8 @@ int parse_optgroup(void *optctx, OptionGroup *g, const OptionDef *defs);
  * same as the order of group definitions.
  */
 int split_commandline(OptionParseContext *octx, int argc, char *argv[],
-                      const OptionDef *options, const OptionGroupDef *groups,
-                      int nb_groups);
+                      const OptionDef *options,
+                      const OptionGroupDef *groups, int nb_groups);
 
 /**
  * Free all allocated memory in an OptionParseContext.
@@ -453,7 +456,8 @@ int filter_codec_opts(const AVDictionary *opts, enum AVCodecID codec_id,
  * Each dictionary will contain the options from codec_opts which can
  * be applied to the corresponding stream codec context.
  */
-int setup_find_stream_info_opts(AVFormatContext *s, AVDictionary *codec_opts,
+int setup_find_stream_info_opts(AVFormatContext *s,
+                                AVDictionary *codec_opts,
                                 AVDictionary ***dst);
 
 /**
@@ -465,8 +469,9 @@ int setup_find_stream_info_opts(AVFormatContext *s, AVDictionary *codec_opts,
  *
  * @see av_strerror()
  */
-static inline void print_error(const char *filename, int err) {
-  av_log(NULL, AV_LOG_ERROR, "%s: %s\n", filename, av_err2str(err));
+static inline void print_error(const char *filename, int err)
+{
+    av_log(NULL, AV_LOG_ERROR, "%s: %s\n", filename, av_err2str(err));
 }
 
 /**
@@ -501,8 +506,7 @@ int read_yesno(void);
  * preset, may be NULL
  */
 FILE *get_preset_file(char *filename, size_t filename_size,
-                      const char *preset_name, int is_path,
-                      const char *codec_name);
+                      const char *preset_name, int is_path, const char *codec_name);
 
 /**
  * Realloc array to hold new_size elements of elem_size.
@@ -529,13 +533,13 @@ int grow_array(void **array, int elem_size, int *size, int new_size);
  */
 void *allocate_array_elem(void *array, size_t elem_size, int *nb_elems);
 
-#define GROW_ARRAY(array, nb_elems)                                            \
-  grow_array((void **)&array, sizeof(*array), &nb_elems, nb_elems + 1)
+#define GROW_ARRAY(array, nb_elems)\
+    grow_array((void**)&array, sizeof(*array), &nb_elems, nb_elems + 1)
 
 double get_rotation(const int32_t *displaymatrix);
 
 /* read file contents into a string */
-char *file_read(const char *filename);
+char *read_file_to_string(const char *filename);
 
 /* Remove keys in dictionary b from dictionary a */
 void remove_avoptions(AVDictionary **a, AVDictionary *b);
@@ -544,5 +548,13 @@ void remove_avoptions(AVDictionary **a, AVDictionary *b);
 int check_avoptions(AVDictionary *m);
 
 int cmdutils_isalnum(char c);
+
+/**
+ * This does the same as libavformat/dump.c corresponding function
+ * and should probably be kept in sync when the other one changes.
+ */
+void dump_dictionary(void *ctx, const AVDictionary *m,
+                     const char *name, const char *indent,
+                     int log_level);
 
 #endif /* FFTOOLS_CMDUTILS_H */

@@ -24,7 +24,8 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.i7play.tiny_ffmpeg_example"
-    compileSdkVersion 35
+    // 音频插件使用 API 36 编译，统一示例的 compileSdk 避免构建不匹配。
+    compileSdkVersion 36
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8

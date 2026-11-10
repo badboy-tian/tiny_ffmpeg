@@ -18,18 +18,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <stdint.h>
-#include <time.h>
-
 #include "config.h"
+
+#include <stdint.h>
 
 #if HAVE_SYS_RESOURCE_H
 #include <sys/time.h>
 #include <sys/resource.h>
 #endif
-
-// iOS: 显式声明 time 函数
-extern time_t time(time_t *);
 
 #include "ffmpeg.h"
 #include "ffmpeg_sched.h"
@@ -51,7 +47,6 @@ extern time_t time(time_t *);
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/stereo3d.h"
-// #include "graph/graphprint.h"  // iOS: graph功能已移除
 
 HWDevice *filter_hw_device;
 
@@ -60,9 +55,6 @@ char *vstats_filename;
 float dts_delta_threshold   = 10;
 float dts_error_threshold   = 3600*30;
 
-#if FFMPEG_OPT_VSYNC
-enum VideoSyncMethod video_sync_method = VSYNC_AUTO;
-#endif
 float frame_drop_threshold = 0;
 int do_benchmark      = 0;
 int do_benchmark_all  = 0;
@@ -93,6 +85,38 @@ static int no_file_overwrite  = 0;
 int ignore_unknown_streams = 0;
 int copy_unknown_streams = 0;
 int recast_media = 0;
+
+// CLI 原本每次启动进程只初始化一次，嵌入后要为下一条命令恢复默认值。
+void ffmpeg_reset_options(void)
+{
+    dts_delta_threshold = 10;
+    dts_error_threshold = 3600*30;
+    frame_drop_threshold = 0;
+    do_benchmark = 0;
+    do_benchmark_all = 0;
+    do_hex_dump = 0;
+    do_pkt_dump = 0;
+    copy_ts = 0;
+    start_at_zero = 0;
+    copy_tb = -1;
+    debug_ts = 0;
+    exit_on_error = 0;
+    abort_on_flags = 0;
+    print_stats = -1;
+    stdin_interaction = 0;
+    max_error_rate = 2.0/3;
+    filter_complex_nbthreads = 0;
+    filter_buffered_frames = 0;
+    vstats_version = 2;
+    print_graphs = 0;
+    auto_conversion_filters = 1;
+    stats_period = 500000;
+    file_overwrite = 0;
+    no_file_overwrite = 0;
+    ignore_unknown_streams = 0;
+    copy_unknown_streams = 0;
+    recast_media = 0;
+}
 
 // this struct is passed as the optctx argument
 // to func_arg() for global options
@@ -246,6 +270,70 @@ OPT_MATCH_PER_STREAM(int,   int,          OPT_TYPE_INT,    i);
 OPT_MATCH_PER_STREAM(int64, int64_t,      OPT_TYPE_INT64,  i64);
 OPT_MATCH_PER_STREAM(dbl,   double,       OPT_TYPE_DOUBLE, dbl);
 
+static unsigned opt_match_per_stream_group(void *logctx, enum OptionType type,
+                                           const SpecifierOptList *sol,
+                                           AVFormatContext *fc, AVStreamGroup *stg)
+{
+    int matches = 0, match_idx = -1;
+
+    av_assert0((type == sol->type) || !sol->nb_opt);
+
+    for (int i = 0; i < sol->nb_opt; i++) {
+        const StreamSpecifier *ss = &sol->opt[i].stream_spec;
+
+        if (stream_group_specifier_match(ss, fc, stg, logctx)) {
+            match_idx = i;
+            matches++;
+        }
+    }
+
+    if (matches > 1 && sol->opt_canon) {
+        const SpecifierOpt *so = &sol->opt[match_idx];
+        const char *spec = so->specifier && so->specifier[0] ? so->specifier : "";
+
+        char namestr[128] = "";
+        char optval_buf[32];
+        const char *optval = optval_buf;
+
+        snprintf(namestr, sizeof(namestr), "-%s", sol->opt_canon->name);
+        if (sol->opt_canon->flags & OPT_HAS_ALT) {
+            const char * const *names_alt = sol->opt_canon->u1.names_alt;
+            for (int i = 0; names_alt[i]; i++)
+                av_strlcatf(namestr, sizeof(namestr), "/-%s", names_alt[i]);
+        }
+
+        switch (sol->type) {
+        case OPT_TYPE_STRING: optval = so->u.str;                                             break;
+        case OPT_TYPE_INT:    snprintf(optval_buf, sizeof(optval_buf), "%d", so->u.i);        break;
+        case OPT_TYPE_INT64:  snprintf(optval_buf, sizeof(optval_buf), "%"PRId64, so->u.i64); break;
+        case OPT_TYPE_FLOAT:  snprintf(optval_buf, sizeof(optval_buf), "%f", so->u.f);        break;
+        case OPT_TYPE_DOUBLE: snprintf(optval_buf, sizeof(optval_buf), "%f", so->u.dbl);      break;
+        default: av_assert0(0);
+        }
+
+        av_log(logctx, AV_LOG_WARNING, "Multiple %s options specified for "
+               "stream group %d, only the last option '-%s%s%s %s' will be used.\n",
+               namestr, stg->index, sol->opt_canon->name, spec[0] ? ":" : "",
+               spec, optval);
+    }
+
+    return match_idx + 1;
+}
+
+#define OPT_MATCH_PER_STREAM_GROUP(name, type, opt_type, m)                                  \
+void opt_match_per_stream_group_ ## name(void *logctx, const SpecifierOptList *sol,          \
+                                         AVFormatContext *fc, AVStreamGroup *stg, type *out) \
+{                                                                                            \
+    unsigned ret = opt_match_per_stream_group(logctx, opt_type, sol, fc, stg);               \
+    if (ret > 0)                                                                             \
+        *out = sol->opt[ret - 1].u.m;                                                        \
+}
+
+OPT_MATCH_PER_STREAM_GROUP(str,   const char *, OPT_TYPE_STRING, str);
+OPT_MATCH_PER_STREAM_GROUP(int,   int,          OPT_TYPE_INT,    i);
+OPT_MATCH_PER_STREAM_GROUP(int64, int64_t,      OPT_TYPE_INT64,  i64);
+OPT_MATCH_PER_STREAM_GROUP(dbl,   double,       OPT_TYPE_DOUBLE, dbl);
+
 int view_specifier_parse(const char **pspec, ViewSpecifier *vs)
 {
     const char *spec = *pspec;
@@ -299,37 +387,16 @@ int view_specifier_parse(const char **pspec, ViewSpecifier *vs)
     return 0;
 }
 
-int parse_and_set_vsync(const char *arg, int *vsync_var, int file_idx, int st_idx, int is_global)
+int parse_and_set_vsync(const char *arg, enum VideoSyncMethod *vsync_var, int file_idx, int st_idx)
 {
     if      (!av_strcasecmp(arg, "cfr"))         *vsync_var = VSYNC_CFR;
     else if (!av_strcasecmp(arg, "vfr"))         *vsync_var = VSYNC_VFR;
     else if (!av_strcasecmp(arg, "passthrough")) *vsync_var = VSYNC_PASSTHROUGH;
-#if FFMPEG_OPT_VSYNC_DROP
-    else if (!av_strcasecmp(arg, "drop")) {
-        av_log(NULL, AV_LOG_WARNING, "-vsync/fps_mode drop is deprecated\n");
-        *vsync_var = VSYNC_DROP;
-    }
-#endif
-    else if (!is_global && !av_strcasecmp(arg, "auto"))  *vsync_var = VSYNC_AUTO;
-    else if (!is_global) {
+    else if (!av_strcasecmp(arg, "auto"))        *vsync_var = VSYNC_AUTO;
+    else {
         av_log(NULL, AV_LOG_FATAL, "Invalid value %s specified for fps_mode of #%d:%d.\n", arg, file_idx, st_idx);
         return AVERROR(EINVAL);
     }
-
-#if FFMPEG_OPT_VSYNC
-    if (is_global && *vsync_var == VSYNC_AUTO) {
-        int ret;
-        double num;
-
-        ret = parse_number("vsync", arg, OPT_TYPE_INT, VSYNC_AUTO, VSYNC_VFR, &num);
-        if (ret < 0)
-            return ret;
-
-        video_sync_method = num;
-        av_log(NULL, AV_LOG_WARNING, "Passing a number to -vsync is deprecated,"
-               " use a string argument as described in the manual.\n");
-    }
-#endif
 
     return 0;
 }
@@ -508,8 +575,10 @@ static int opt_map(void *optctx, const char *opt, const char *arg)
     }
 
     if (arg[0] == '[') {
+        ViewSpecifier vs;
         /* this mapping refers to lavfi output */
         const char *c = arg + 1;
+        char *endptr;
 
         ret = GROW_ARRAY(o->stream_maps, o->nb_stream_maps);
         if (ret < 0)
@@ -522,6 +591,27 @@ static int opt_map(void *optctx, const char *opt, const char *arg)
             ret = AVERROR(EINVAL);
             goto fail;
         }
+
+        arg++;
+
+        m->group_index = -1;
+        file_idx = strtol(arg, &endptr, 0);
+        if (file_idx >= nb_input_files || file_idx < 0)
+            goto end;
+
+        arg = endptr;
+        ret = stream_specifier_parse(&ss, *arg == ':' ? arg + 1 : arg, 1, NULL);
+        if (ret < 0)
+            goto end;
+
+        arg = ss.remainder ? ss.remainder : "";
+        ret = view_specifier_parse(&arg, &vs);
+        if (ret < 0 || (*arg && strcmp(arg, "]")))
+            goto end;
+
+        m->file_index  = file_idx;
+        m->stream_index = ss.idx;
+        m->group_index = ss.stream_list == STREAM_LIST_GROUP_IDX ? ss.list_id : -1;
     } else {
         ViewSpecifier vs;
         char *endptr;
@@ -562,6 +652,9 @@ static int opt_map(void *optctx, const char *opt, const char *arg)
             for (i = 0; i < o->nb_stream_maps; i++) {
                 m = &o->stream_maps[i];
                 if (file_idx == m->file_index &&
+                    !m->linklabel &&
+                    m->stream_index >= 0 &&
+                    m->stream_index < input_files[m->file_index]->nb_streams &&
                     stream_specifier_match(&ss,
                                            input_files[m->file_index]->ctx,
                                            input_files[m->file_index]->ctx->streams[m->stream_index],
@@ -587,6 +680,7 @@ static int opt_map(void *optctx, const char *opt, const char *arg)
 
                 m->file_index   = file_idx;
                 m->stream_index = i;
+                m->group_index  = ss.stream_list == STREAM_LIST_GROUP_IDX ? ss.list_id : -1;
                 m->vs           = vs;
             }
     }
@@ -606,6 +700,7 @@ static int opt_map(void *optctx, const char *opt, const char *arg)
             goto fail;
         }
     }
+end:
     ret = 0;
 fail:
     stream_specifier_uninit(&ss);
@@ -699,14 +794,16 @@ static int opt_recording_timestamp(void *optctx, const char *opt, const char *ar
     char buf[128];
     int64_t recording_timestamp;
     int ret;
+    struct tm time;
 
     ret = av_parse_time(&recording_timestamp, arg, 0);
     if (ret < 0)
         return ret;
 
     recording_timestamp /= 1e6;
-    // iOS: 简化时间格式，直接使用时间戳
-    snprintf(buf, sizeof(buf), "creation_time=%lld", (long long)recording_timestamp);
+    time = *gmtime((time_t*)&recording_timestamp);
+    if (!strftime(buf, sizeof(buf), "creation_time=%Y-%m-%dT%H:%M:%S%z", &time))
+        return -1;
     parse_option(o, "metadata", buf, options);
 
     av_log(NULL, AV_LOG_WARNING, "%s is deprecated, set the 'creation_time' metadata "
@@ -966,9 +1063,15 @@ static int opt_vstats(void *optctx, const char *opt, const char *arg)
 {
     char filename[40];
     time_t today2 = time(NULL);
+    struct tm *today = localtime(&today2);
 
-    // iOS: 简化文件名，使用时间戳
-    snprintf(filename, sizeof(filename), "vstats_%lld.log", (long long)today2);
+    if (!today) { // maybe tomorrow
+        av_log(NULL, AV_LOG_FATAL, "Unable to get current time: %s\n", strerror(errno));
+        return AVERROR(errno);
+    }
+
+    snprintf(filename, sizeof(filename), "vstats_%02d%02d%02d.log", today->tm_hour, today->tm_min,
+             today->tm_sec);
     return opt_vstats_file(NULL, opt, filename);
 }
 
@@ -1017,6 +1120,12 @@ static int opt_preset(void *optctx, const char *opt, const char *arg)
     char filename[1000], line[1000], tmp_line[1000];
     const char *codec_name = NULL;
     int ret = 0;
+    int depth = o->depth;
+
+    if (depth > 2) {
+        av_log(NULL, AV_LOG_ERROR, "too deep recursion\n");
+        return AVERROR(EINVAL);
+    }
 
     codec_name = opt_match_per_type_str(&o->codec_names, *opt);
 
@@ -1028,6 +1137,7 @@ static int opt_preset(void *optctx, const char *opt, const char *arg)
         return AVERROR(ENOENT);
     }
 
+    o->depth ++;
     while (fgets(line, sizeof(line), f)) {
         char *key = tmp_line, *value, *endptr;
 
@@ -1046,7 +1156,8 @@ static int opt_preset(void *optctx, const char *opt, const char *arg)
         else if (!strcmp(key, "vcodec")) opt_video_codec   (o, key, value);
         else if (!strcmp(key, "scodec")) opt_subtitle_codec(o, key, value);
         else if (!strcmp(key, "dcodec")) opt_data_codec    (o, key, value);
-        else if (opt_default_new(o, key, value) < 0) {
+        else if ((parse_option(o, key, value, options) < 0) &&
+                 (opt_default_new(o, key, value) < 0)) {
             av_log(NULL, AV_LOG_FATAL, "%s: Invalid option or argument: '%s', parsed as '%s' = '%s'\n",
                    filename, line, key, value);
             ret = AVERROR(EINVAL);
@@ -1055,6 +1166,7 @@ static int opt_preset(void *optctx, const char *opt, const char *arg)
     }
 
 fail:
+    o->depth = depth;
     fclose(f);
 
     return ret;
@@ -1129,14 +1241,6 @@ static int opt_audio_filters(void *optctx, const char *opt, const char *arg)
     return parse_option(o, "filter:a", arg, options);
 }
 
-#if FFMPEG_OPT_VSYNC
-static int opt_vsync(void *optctx, const char *opt, const char *arg)
-{
-    av_log(NULL, AV_LOG_WARNING, "-vsync is deprecated. Use -fps_mode\n");
-    return parse_and_set_vsync(arg, &video_sync_method, -1, -1, 1);
-}
-#endif
-
 static int opt_timecode(void *optctx, const char *opt, const char *arg)
 {
     OptionsContext *o = optctx;
@@ -1176,31 +1280,6 @@ static int opt_filter_complex(void *optctx, const char *opt, const char *arg)
 
     return 0;
 }
-
-#if FFMPEG_OPT_FILTER_SCRIPT
-static int opt_filter_complex_script(void *optctx, const char *opt, const char *arg)
-{
-    GlobalOptionsContext *go = optctx;
-    char *graph_desc;
-    int ret;
-
-    graph_desc = file_read(arg);
-    if (!graph_desc)
-        return AVERROR(EINVAL);
-
-    av_log(NULL, AV_LOG_WARNING, "-%s is deprecated, use -/filter_complex %s instead\n",
-           opt, arg);
-
-    ret = GROW_ARRAY(go->filtergraphs, go->nb_filtergraphs);
-    if (ret < 0) {
-        av_freep(&graph_desc);
-        return ret;
-    }
-    go->filtergraphs[go->nb_filtergraphs - 1] = graph_desc;
-
-    return 0;
-}
-#endif
 
 void show_help_default(const char *opt, const char *arg)
 {
@@ -1402,7 +1481,7 @@ int ffmpeg_parse_options(int argc, char **argv, Scheduler *sch)
 
     /* create complex filtergraphs */
     for (int i = 0; i < go.nb_filtergraphs; i++) {
-        ret = fg_create(NULL, go.filtergraphs[i], sch);
+        ret = fg_create(NULL, &go.filtergraphs[i], sch, NULL);
         go.filtergraphs[i] = NULL;
         if (ret < 0)
             goto fail;
@@ -1491,22 +1570,6 @@ int opt_timelimit(void *optctx, const char *opt, const char *arg)
 #endif
     return 0;
 }
-
-#if FFMPEG_OPT_QPHIST
-static int opt_qphist(void *optctx, const char *opt, const char *arg)
-{
-    av_log(NULL, AV_LOG_WARNING, "Option -%s is deprecated and has no effect\n", opt);
-    return 0;
-}
-#endif
-
-#if FFMPEG_OPT_ADRIFT_THRESHOLD
-static int opt_adrift_threshold(void *optctx, const char *opt, const char *arg)
-{
-    av_log(NULL, AV_LOG_WARNING, "Option -%s is deprecated and has no effect\n", opt);
-    return 0;
-}
-#endif
 
 static const char *const alt_channel_layout[] = { "ch_layout", NULL};
 static const char *const alt_codec[]          = { "c", "acodec", "vcodec", "scodec", "dcodec", NULL };
@@ -1714,11 +1777,6 @@ const OptionDef options[] = {
     { "filter_buffered_frames", OPT_TYPE_INT, OPT_EXPERT,
         { &filter_buffered_frames },
         "maximum number of buffered frames in a filter graph" },
-#if FFMPEG_OPT_FILTER_SCRIPT
-    { "filter_script",          OPT_TYPE_STRING, OPT_PERSTREAM | OPT_EXPERT | OPT_OUTPUT,
-        { .off = OFFSET(filter_scripts) },
-        "deprecated, use -/filter", "filename" },
-#endif
     { "reinit_filter",          OPT_TYPE_INT, OPT_PERSTREAM | OPT_INPUT | OPT_EXPERT,
         { .off = OFFSET(reinit_filters) },
         "reinit filtergraph on input parameter changes", "" },
@@ -1734,11 +1792,6 @@ const OptionDef options[] = {
     { "lavfi",               OPT_TYPE_FUNC, OPT_FUNC_ARG | OPT_EXPERT,
         { .func_arg = opt_filter_complex },
         "create a complex filtergraph", "graph_description" },
-#if FFMPEG_OPT_FILTER_SCRIPT
-    { "filter_complex_script", OPT_TYPE_FUNC, OPT_FUNC_ARG | OPT_EXPERT,
-        { .func_arg = opt_filter_complex_script },
-        "deprecated, use -/filter_complex instead", "filename" },
-#endif
     { "print_graphs",   OPT_TYPE_BOOL, 0,
         { &print_graphs },
         "print execution graph data to stderr" },
@@ -1838,6 +1891,12 @@ const OptionDef options[] = {
         { .off = OFFSET(display_vflips) },
         "set display vertical flip for stream(s) "
         "(overrides any display rotation if it is not set)"},
+    { "mastering_display",          OPT_TYPE_STRING, OPT_VIDEO | OPT_PERSTREAM | OPT_INPUT | OPT_EXPERT,
+        { .off = OFFSET(mastering_displays) },
+        "set SMPTE2084 mastering display color volume info" },
+    { "content_light",              OPT_TYPE_STRING, OPT_VIDEO | OPT_PERSTREAM | OPT_INPUT | OPT_EXPERT,
+        { .off = OFFSET(content_lights) },
+        "set SMPTE2084 Max CLL and Max FALL values" },
     { "vn",                         OPT_TYPE_BOOL,   OPT_VIDEO | OPT_OFFSET | OPT_INPUT | OPT_OUTPUT,
         { .off = OFFSET(video_disable) },
         "disable video" },
@@ -1885,7 +1944,7 @@ const OptionDef options[] = {
         .u1.name_canon = "tag", },
     { "fps_mode",                   OPT_TYPE_STRING, OPT_VIDEO | OPT_EXPERT | OPT_PERSTREAM | OPT_OUTPUT,
         { .off = OFFSET(fps_mode) },
-        "set framerate mode for matching video streams; overrides vsync" },
+        "set framerate mode for matching video streams" },
     { "force_fps",                  OPT_TYPE_BOOL,   OPT_VIDEO | OPT_EXPERT  | OPT_PERSTREAM | OPT_OUTPUT,
         { .off = OFFSET(force_fps) },
         "force the selected framerate, disable the best supported framerate selection" },
@@ -2069,28 +2128,6 @@ const OptionDef options[] = {
     { "filter_hw_device", OPT_TYPE_FUNC, OPT_FUNC_ARG | OPT_EXPERT,
         { .func_arg = opt_filter_hw_device },
         "set hardware device used when filtering", "device" },
-
-    // deprecated options
-#if FFMPEG_OPT_ADRIFT_THRESHOLD
-    { "adrift_threshold", OPT_TYPE_FUNC, OPT_FUNC_ARG | OPT_EXPERT,
-        { .func_arg = opt_adrift_threshold },
-        "deprecated, does nothing", "threshold" },
-#endif
-#if FFMPEG_OPT_TOP
-    { "top", OPT_TYPE_INT,     OPT_VIDEO | OPT_EXPERT | OPT_PERSTREAM | OPT_INPUT | OPT_OUTPUT,
-        { .off = OFFSET(top_field_first) },
-        "deprecated, use the setfield video filter", "" },
-#endif
-#if FFMPEG_OPT_QPHIST
-    { "qphist", OPT_TYPE_FUNC, OPT_VIDEO | OPT_EXPERT,
-        { .func_arg = opt_qphist },
-        "deprecated, does nothing" },
-#endif
-#if FFMPEG_OPT_VSYNC
-    { "vsync",                  OPT_TYPE_FUNC, OPT_FUNC_ARG | OPT_EXPERT,
-        { .func_arg = opt_vsync },
-        "set video sync method globally; deprecated, use -fps_mode", "" },
-#endif
 
     { NULL, },
 };

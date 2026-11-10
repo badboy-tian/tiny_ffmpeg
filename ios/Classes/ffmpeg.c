@@ -78,10 +78,12 @@
 #include "libavdevice/avdevice.h"
 
 #include "cmdutils.h"
+#if CONFIG_MEDIACODEC
+#include "compat/android/binder.h"
+#endif
 #include "ffmpeg.h"
 #include "ffmpeg_sched.h"
-#include "ffmpeg_utils.h"
-// #include "graph/graphprint.h"  // iOS: graph功能已移除
+#include "fftools_utils.h"
 
 const char program_name[] = "ffmpeg";
 const int program_birth_year = 2000;
@@ -107,10 +109,6 @@ int        nb_input_files   = 0;
 
 OutputFile   **output_files   = NULL;
 int         nb_output_files   = 0;
-int request_cancel_exe_ffmpeg_cmd = 0;
-
-// Session 支持：当前执行的 sessionId
-static int64_t current_ffmpeg_session_id = 0;
 
 FilterGraph **filtergraphs;
 int        nb_filtergraphs;
@@ -139,122 +137,20 @@ void term_exit(void)
     term_exit_sigsafe();
 }
 
-static volatile int received_sigterm = 0;
-static volatile int received_nb_signals = 0;
+static atomic_int received_sigterm = 0;
+static atomic_int received_nb_signals = 0;
 static atomic_int transcode_init_done = 0;
 static volatile int ffmpeg_exited = 0;
+static atomic_int_fast64_t current_ffmpeg_session_id;
 static int64_t copy_ts_first_pts = AV_NOPTS_VALUE;
-
-static void
-sigterm_handler(int sig)
-{
-    int ret;
-    received_sigterm = sig;
-    received_nb_signals++;
-    term_exit_sigsafe();
-    if(received_nb_signals > 3) {
-        ret = write(2/*STDERR_FILENO*/, "Received > 3 system signals, hard exiting\n",
-                    strlen("Received > 3 system signals, hard exiting\n"));
-        if (ret < 0) { /* Do nothing */ };
-        exit(123);
-    }
-}
-
-#if HAVE_SETCONSOLECTRLHANDLER
-static BOOL WINAPI CtrlHandler(DWORD fdwCtrlType)
-{
-    av_log(NULL, AV_LOG_DEBUG, "\nReceived windows signal %ld\n", fdwCtrlType);
-
-    switch (fdwCtrlType)
-    {
-    case CTRL_C_EVENT:
-    case CTRL_BREAK_EVENT:
-        sigterm_handler(SIGINT);
-        return TRUE;
-
-    case CTRL_CLOSE_EVENT:
-    case CTRL_LOGOFF_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
-        sigterm_handler(SIGTERM);
-        /* Basically, with these 3 events, when we return from this method the
-           process is hard terminated, so stall as long as we need to
-           to try and let the main thread(s) clean up and gracefully terminate
-           (we have at most 5 seconds, but should be done far before that). */
-        while (!ffmpeg_exited) {
-            Sleep(0);
-        }
-        return TRUE;
-
-    default:
-        av_log(NULL, AV_LOG_ERROR, "Received unknown windows signal %ld\n", fdwCtrlType);
-        return FALSE;
-    }
-}
-#endif
-
-#ifdef __linux__
-#define SIGNAL(sig, func)               \
-    do {                                \
-        action.sa_handler = func;       \
-        sigaction(sig, &action, NULL);  \
-    } while (0)
-#else
-#define SIGNAL(sig, func) \
-    signal(sig, func)
-#endif
 
 void term_init(void)
 {
-#if defined __linux__
-    struct sigaction action = {0};
-    action.sa_handler = sigterm_handler;
-
-    /* block other interrupts while processing this one */
-    sigfillset(&action.sa_mask);
-
-    /* restart interruptible functions (i.e. don't fail with EINTR)  */
-    action.sa_flags = SA_RESTART;
-#endif
-
-#if HAVE_TERMIOS_H
-    if (stdin_interaction) {
-        struct termios tty;
-        if (tcgetattr (0, &tty) == 0) {
-            oldtty = tty;
-            restore_tty = 1;
-
-            tty.c_iflag &= ~(IGNBRK|BRKINT|PARMRK|ISTRIP
-                             |INLCR|IGNCR|ICRNL|IXON);
-            tty.c_oflag |= OPOST;
-            tty.c_lflag &= ~(ECHO|ECHONL|ICANON|IEXTEN);
-            tty.c_cflag &= ~(CSIZE|PARENB);
-            tty.c_cflag |= CS8;
-            tty.c_cc[VMIN] = 1;
-            tty.c_cc[VTIME] = 0;
-
-            tcsetattr (0, TCSANOW, &tty);
-        }
-        SIGNAL(SIGQUIT, sigterm_handler); /* Quit (POSIX).  */
-    }
-#endif
-
-    SIGNAL(SIGINT , sigterm_handler); /* Interrupt (ANSI).    */
-    SIGNAL(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
-#ifdef SIGXCPU
-    SIGNAL(SIGXCPU, sigterm_handler);
-#endif
-#ifdef SIGPIPE
-    signal(SIGPIPE, SIG_IGN); /* Broken pipe (POSIX). */
-#endif
-#if HAVE_SETCONSOLECTRLHANDLER
-    SetConsoleCtrlHandler((PHANDLER_ROUTINE) CtrlHandler, TRUE);
-#endif
+    // 插件通过 Session 取消命令，不能替换宿主进程的信号处理器。
 }
 
-/* read a key without blocking */
 static int read_key(void)
 {
-    unsigned char ch;
 #if HAVE_TERMIOS_H
     int n = 1;
     struct timeval tv;
@@ -266,6 +162,7 @@ static int read_key(void)
     tv.tv_usec = 0;
     n = select(1, &rfds, NULL, NULL, &tv);
     if (n > 0) {
+        unsigned char ch;
         n = read(0, &ch, 1);
         if (n == 1)
             return ch;
@@ -290,6 +187,7 @@ static int read_key(void)
         }
         //Read it
         if(nchars != 0) {
+            unsigned char ch;
             if (read(0, &ch, 1) == 1)
                 return ch;
             return 0;
@@ -306,17 +204,13 @@ static int read_key(void)
 
 static int decode_interrupt_cb(void *ctx)
 {
-    return received_nb_signals > atomic_load(&transcode_init_done);
+    return atomic_load(&received_nb_signals) != 0;
 }
 
 const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
 
 static void ffmpeg_cleanup(int ret)
 {
-    // iOS: graph 功能已移除
-    // if ((print_graphs || print_graphs_file) && nb_output_files > 0)
-    //     print_filtergraphs(filtergraphs, nb_filtergraphs, input_files, nb_input_files, output_files, nb_output_files);
-
     if (do_benchmark) {
         int64_t maxrss = getmaxrss() / 1024;
         av_log(NULL, AV_LOG_INFO, "bench: maxrss=%"PRId64"KiB\n", maxrss);
@@ -342,6 +236,7 @@ static void ffmpeg_cleanup(int ret)
                    "Error closing vstats file, loss of information possible: %s\n",
                    av_err2str(AVERROR(errno)));
     }
+    vstats_file = NULL;
     av_freep(&vstats_filename);
     of_enc_stats_close();
 
@@ -352,17 +247,12 @@ static void ffmpeg_cleanup(int ret)
     av_freep(&print_graphs_file);
     av_freep(&print_graphs_format);
 
-    // 释放 input_files 和 output_files，并重置计数器
-    // 这是修复第二次调用 FFmpeg 时崩溃的关键
     av_freep(&input_files);
-    nb_input_files = 0;
     av_freep(&output_files);
-    nb_output_files = 0;
 
-    // 同时重置 filtergraphs 和 decoders 计数器
-    nb_filtergraphs = 0;
-    nb_decoders = 0;
-
+    // CLI 在 App 进程中会反复运行，释放资源后清除本次命令的计数。
+    nb_input_files = nb_output_files = nb_filtergraphs = nb_decoders = 0;
+    avio_closep(&progress_avio);
     uninit_opts();
 
     avformat_network_deinit();
@@ -413,6 +303,7 @@ static void frame_data_free(void *opaque, uint8_t *data)
 {
     FrameData *fd = (FrameData *)data;
 
+    av_frame_side_data_free(&fd->side_data, &fd->nb_side_data);
     avcodec_parameters_free(&fd->par_enc);
 
     av_free(data);
@@ -442,6 +333,8 @@ static int frame_data_ensure(AVBufferRef **dst, int writable)
 
             memcpy(fd, fd_src, sizeof(*fd));
             fd->par_enc = NULL;
+            fd->side_data = NULL;
+            fd->nb_side_data = 0;
 
             if (fd_src->par_enc) {
                 int ret = 0;
@@ -450,6 +343,16 @@ static int frame_data_ensure(AVBufferRef **dst, int writable)
                 ret = fd->par_enc ?
                       avcodec_parameters_copy(fd->par_enc, fd_src->par_enc) :
                       AVERROR(ENOMEM);
+                if (ret < 0) {
+                    av_buffer_unref(dst);
+                    av_buffer_unref(&src);
+                    return ret;
+                }
+            }
+
+            if (fd_src->nb_side_data) {
+                int ret = clone_side_data(&fd->side_data, &fd->nb_side_data,
+                                          fd_src->side_data, fd_src->nb_side_data, 0);
                 if (ret < 0) {
                     av_buffer_unref(dst);
                     av_buffer_unref(&src);
@@ -565,6 +468,9 @@ void update_benchmark(const char *fmt, ...)
     }
 }
 
+static int64_t last_time = -1;
+static int first_report = 1;
+
 static void print_report(int is_last_report, int64_t timer_start, int64_t cur_time, int64_t pts)
 {
     AVBPrint buf, buf_script;
@@ -572,8 +478,6 @@ static void print_report(int is_last_report, int64_t timer_start, int64_t cur_ti
     int vid;
     double bitrate;
     double speed;
-    static int64_t last_time = -1;
-    static int first_report = 1;
     uint64_t nb_frames_dup = 0, nb_frames_drop = 0;
     int mins, secs, ms, us;
     int64_t hours;
@@ -593,6 +497,12 @@ static void print_report(int is_last_report, int64_t timer_start, int64_t cur_ti
             return;
         last_time = cur_time;
     }
+
+    // 用结构化进度回调保持三端一致，关闭控制台日志也能更新导出进度。
+    extern void tiny_ffmpeg_report_progress(int64_t, int64_t, int64_t, double);
+    tiny_ffmpeg_report_progress(atomic_load(&current_ffmpeg_session_id),
+        pts == AV_NOPTS_VALUE ? 0 : pts, total_size,
+        cur_time > timer_start && pts > 0 ? (double)pts / (cur_time - timer_start) : 0);
 
     t = (cur_time-timer_start) / 1000000.0;
 
@@ -819,8 +729,6 @@ static int check_keyboard_interaction(int64_t cur_time)
 {
     int i, key;
     static int64_t last_time;
-    if (received_nb_signals)
-        return AVERROR_EXIT;
     /* read_key() returns 0 on EOF */
     if (cur_time - last_time >= 100000) {
         key =  read_key();
@@ -904,6 +812,9 @@ static int transcode(Scheduler *sch)
     while (!sch_wait(sch, stats_period, &transcode_ts)) {
         int64_t cur_time= av_gettime_relative();
 
+        if (received_nb_signals)
+            break;
+
         /* if 'q' pressed, exits */
         if (stdin_interaction)
             if (check_keyboard_interaction(cur_time) < 0)
@@ -973,16 +884,23 @@ static int64_t getmaxrss(void)
 #endif
 }
 
-int main(int argc, char **argv)
+static int run_ffmpeg(int argc, char **argv)
 {
     Scheduler *sch = NULL;
 
     int ret;
     BenchmarkTimeStamps ti;
 
-    init_dynload();
+    // 每个 Session 使用独立的命令选项和进度基准。
+    atomic_store(&transcode_init_done, 0);
+    atomic_store(&nb_output_dumped, 0);
+    ffmpeg_exited = 0;
+    copy_ts_first_pts = AV_NOPTS_VALUE;
+    last_time = -1;
+    first_report = 1;
+    ffmpeg_reset_options();
 
-    setvbuf(stderr,NULL,_IONBF,0); /* win32 runtime needs this */
+    init_dynload();
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
     parse_loglevel(argc, argv, options);
@@ -1017,6 +935,10 @@ int main(int argc, char **argv)
         ret = 1;
         goto finish;
     }
+
+#if CONFIG_MEDIACODEC
+    android_binder_threadpool_init_if_required();
+#endif
 
     current_time = ti = get_benchmark_time_stamps();
     ret = transcode(sch);
@@ -1041,6 +963,7 @@ finish:
     ffmpeg_cleanup(ret);
 
     sch_free(&sch);
+    atomic_store(&current_ffmpeg_session_id, 0);
 
     av_log(NULL, AV_LOG_VERBOSE, "\n");
     av_log(NULL, AV_LOG_VERBOSE, "Exiting with exit code %d\n", ret);
@@ -1048,128 +971,37 @@ finish:
     return ret;
 }
 
-int cancel_exe_ffmpeg_cmd() {
-    request_cancel_exe_ffmpeg_cmd = 1;
-    received_sigterm = SIGTERM;
-    received_nb_signals++;
+// 保留插件调用层使用的 Session 接口；FFmpeg 错误通过返回值传给宿主。
+int64_t get_ffmpeg_current_session_id(void)
+{
+    return atomic_load(&current_ffmpeg_session_id);
+}
+
+void cancel_ffmpeg_cmd(void)
+{
+    atomic_store(&received_sigterm, SIGTERM);
+    atomic_store(&received_nb_signals, 1);
+}
+
+int cancel_exe_ffmpeg_cmd(void)
+{
+    cancel_ffmpeg_cmd();
     return 0;
 }
 
-// Session 管理相关的全局变量
-#include <setjmp.h>
-static jmp_buf ex_buf__;
-static int main_return_code = 0;
-
-// 获取当前 session ID
-int64_t get_ffmpeg_current_session_id(void) {
-    return current_ffmpeg_session_id;
-}
-
-// 设置当前 session ID
-void set_ffmpeg_current_session_id(int64_t sessionId) {
-    current_ffmpeg_session_id = sessionId;
-}
-
-// 重写 exit_program 以使用 longjmp 而不是 exit()
-void exit_program(int ret) {
-    if (main_return_code == 0)
-        main_return_code = ret;
-    longjmp(ex_buf__, 1);
-}
-
-// 带 session 的 FFmpeg 命令执行函数
-int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv,
+int exe_ffmpeg_cmd_with_session(int64_t session_id, int argc, char **argv,
                                 int64_t handle,
-                                void (*progressCallBack)(int64_t, int, float),
-                                int64_t totalTime) {
-    Scheduler *sch = NULL;
-    int ret;
-    BenchmarkTimeStamps ti;
-
-    // 重置状态
-    current_ffmpeg_session_id = sessionId;
-    received_sigterm = 0;
-    received_nb_signals = 0;
-    atomic_store(&transcode_init_done, 0);
-    ffmpeg_exited = 0;
-    main_return_code = 0;
-    request_cancel_exe_ffmpeg_cmd = 0;
-
-    // 设置 longjmp 点，用于 exit_program 调用
-    if (setjmp(ex_buf__)) {
-        // 从 exit_program 调用返回
-        ret = main_return_code;
-        goto cleanup;
+                                void (*progress_callback)(int64_t, int, float),
+                                int64_t total_time)
+{
+    atomic_store(&received_sigterm, 0);
+    atomic_store(&received_nb_signals, 0);
+    atomic_store(&current_ffmpeg_session_id, session_id);
+    // 启动前复查 Session，避免排队取消被 signal 初始化覆盖。
+    extern int isSessionCancelled(int64_t session_id);
+    if (isSessionCancelled(session_id)) {
+        atomic_store(&current_ffmpeg_session_id, 0);
+        return AVERROR_EXIT;
     }
-
-    init_dynload();
-
-    setvbuf(stderr, NULL, _IONBF, 0);
-
-    av_log_set_flags(AV_LOG_SKIP_REPEATED);
-    parse_loglevel(argc, argv, options);
-
-#if CONFIG_AVDEVICE
-    avdevice_register_all();
-#endif
-    avformat_network_init();
-
-    show_banner(argc, argv, options);
-
-    sch = sch_alloc();
-    if (!sch) {
-        ret = AVERROR(ENOMEM);
-        goto finish;
-    }
-
-    /* parse options and open all input/output files */
-    ret = ffmpeg_parse_options(argc, argv, sch);
-    if (ret < 0)
-        goto finish;
-
-    if (nb_output_files <= 0 && nb_input_files == 0) {
-        show_usage();
-        av_log(NULL, AV_LOG_WARNING, "Use -h to get full help or, even better, run 'man %s'\n", program_name);
-        ret = 1;
-        goto finish;
-    }
-
-    if (nb_output_files <= 0) {
-        av_log(NULL, AV_LOG_FATAL, "At least one output file must be specified\n");
-        ret = 1;
-        goto finish;
-    }
-
-    current_time = ti = get_benchmark_time_stamps();
-    ret = transcode(sch);
-    if (ret >= 0 && do_benchmark) {
-        int64_t utime, stime, rtime;
-        current_time = get_benchmark_time_stamps();
-        utime = current_time.user_usec - ti.user_usec;
-        stime = current_time.sys_usec  - ti.sys_usec;
-        rtime = current_time.real_usec - ti.real_usec;
-        av_log(NULL, AV_LOG_INFO,
-               "bench: utime=%0.3fs stime=%0.3fs rtime=%0.3fs\n",
-               utime / 1000000.0, stime / 1000000.0, rtime / 1000000.0);
-    }
-
-    ret = received_nb_signals                 ? 255 :
-          (ret == FFMPEG_ERROR_RATE_EXCEEDED) ?  69 : ret;
-
-finish:
-    if (ret == AVERROR_EXIT)
-        ret = 0;
-
-cleanup:
-    ffmpeg_cleanup(ret);
-
-    if (sch)
-        sch_free(&sch);
-
-    av_log(NULL, AV_LOG_VERBOSE, "\n");
-    av_log(NULL, AV_LOG_VERBOSE, "Exiting with exit code %d\n", ret);
-
-    current_ffmpeg_session_id = 0;
-
-    return ret;
+    return run_ffmpeg(argc, argv);
 }

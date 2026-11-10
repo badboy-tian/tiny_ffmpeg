@@ -38,6 +38,9 @@ add_library(ffmpegutils SHARED
     ${FFMPEG_DIR}
 )
 
+# FFmpeg 9 使用 C17 及原子操作，必须与生成库时的语言标准一致。
+target_compile_features(ffmpegutils PRIVATE c_std_17)
+
 # 系统库
 target_link_libraries(ffmpegutils PUBLIC
     libace_napi.z.so libEGL.so libGLESv3.so libace_ndk.z.so libuv.so libhilog_ndk.z.so libc++_shared.so
@@ -69,8 +72,9 @@ target_link_libraries(ffmpegutils PRIVATE
 target_link_libraries(ffmpegutils PRIVATE
     ${NATIVERENDER_ROOT_PATH}/thirdparty/zlib/${OHOS_ARCH}/lib/libz.a
     ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/lib/libmp3lame.a
-    ${NATIVERENDER_ROOT_PATH}/thirdparty/fdk-aac/${OHOS_ARCH}/lib/libfdk-aac.a
     ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/lib/libx264.a
+    # CUVA 写回随 x265 的输入帧编码，Main 10 静态依赖需要一起链接。
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/x265/${OHOS_ARCH}/lib/libx265.a
     ${NATIVERENDER_ROOT_PATH}/thirdparty/libzimg/${OHOS_ARCH}/lib/libzimg.a
 )
 
@@ -79,5 +83,6 @@ target_include_directories(ffmpegutils PRIVATE
     ${NATIVERENDER_ROOT_PATH}/thirdparty/FFmpeg/${OHOS_ARCH}/include
     ${NATIVERENDER_ROOT_PATH}/thirdparty/lame/${OHOS_ARCH}/include
     ${NATIVERENDER_ROOT_PATH}/thirdparty/x264/${OHOS_ARCH}/include
+    ${NATIVERENDER_ROOT_PATH}/thirdparty/x265/${OHOS_ARCH}/include
     ${NATIVERENDER_ROOT_PATH}/thirdparty/libzimg/${OHOS_ARCH}/include
 )

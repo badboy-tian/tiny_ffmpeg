@@ -2,193 +2,184 @@ package com.i7play.tiny_ffmpeg
 
 import android.os.Handler
 import android.os.Looper
-import androidx.annotation.NonNull
-
 import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.plugin.common.MethodCall
-import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.EventChannel.EventSink
-import java.util.concurrent.ExecutorService
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.MethodChannel.Result
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
-import java.util.concurrent.ConcurrentHashMap
 
-/** TinyFfmpegPlugin */
-data class SessionInfo(
-    val sessionId: Long,
-    var future: Future<*>? = null,
-    var result: Result? = null,
-    var isCancelled: Boolean = false
-)
+// started/finished 在同一把锁内转换，保证排队取消与线程启动不会重复释放原生槽位。
+private class SessionInfo(val sessionId: Long) {
+    var future: Future<*>? = null
+    var started = false
+    var finished = false
+    var cancelled = false
+}
 
-class TinyFfmpegPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
+class TinyFfmpegPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
-    private var eventSink: EventSink? = null
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private var future: Future<*>? = null
+    private var executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap<Long, SessionInfo>()
+    private val pendingResults = linkedMapOf<Long, Map<String, Any>>()
+    private var eventSink: EventSink? = null
+    @Volatile private var attached = false
 
-    override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg")
+    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        if (executor.isShutdown) executor = Executors.newSingleThreadExecutor()
+        attached = true
+        channel = MethodChannel(binding.binaryMessenger, "tiny_ffmpeg")
         channel.setMethodCallHandler(this)
-
-        eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, "tiny_ffmpeg_progress_event")
+        eventChannel = EventChannel(binding.binaryMessenger, "tiny_ffmpeg_progress_event")
         eventChannel.setStreamHandler(this)
     }
 
-    override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
+    override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "executeFFmpegCommand" -> {
-                val argc = call.argument<Int>("argc")
                 val argv = call.argument<List<String>>("argv")
-                if (argc == null || argv == null) {
-                    val map = hashMapOf<String, Any>()
-                    map["type"] = "result"
-                    map["code"] = -1
-                    map["message"] = "参数错误"
-                    result.success(map)
+                val argc = call.argument<Int>("argc")
+                if (argv.isNullOrEmpty() || argc != argv.size) {
+                    result.error("ARGUMENT_ERROR", "argc must match a nonempty argv", null)
                     return
                 }
-
-                // 创建 Session
-                val sessionId = FFMpegUtils.createFFmpegSession()
-                if (sessionId < 0) {
-                    result.error("SESSION_ERROR", "Failed to create session", null)
+                val id = FFMpegUtils.createFFmpegSession()
+                if (id < 0) {
+                    result.error("SESSION_ERROR", "Too many sessions", null)
                     return
                 }
-
-                val sessionInfo = SessionInfo(sessionId)
-                sessionInfo.result = result
-                sessions[sessionId] = sessionInfo
-
-                // 返回 sessionId 给 Dart 层
-                result.success(mapOf("sessionId" to sessionId))
-
-                sessionInfo.future = executor.submit {
+                val session = SessionInfo(id)
+                sessions[id] = session
+                FFMpegUtils.setProgressListener(id) { time, size, speed ->
+                    mainHandler.post {
+                        if (attached && sessions.containsKey(id)) eventSink?.success(mapOf(
+                            "type" to "progress", "sessionId" to id,
+                            "time" to time, "size" to size, "speed" to speed
+                        ))
+                    }
+                }
+                result.success(mapOf("sessionId" to id))
+                session.future = executor.submit {
+                    synchronized(session) {
+                        if (session.finished) return@submit
+                        session.started = true
+                    }
+                    var code = -1
+                    var message = "FFmpeg execution failed"
+                    var errorLog = ""
                     try {
-                        // 新版 FFmpeg 8.0 直接返回结果码，不再使用回调
-                        val ret = FFMpegUtils.executeFFmpegCommandWithSession(
-                            sessionId,
-                            argc, 
-                            argv.toTypedArray(), 
-                            null,  // 不再使用回调
-                            -1
+                        code = FFMpegUtils.executeFFmpegCommandWithSession(
+                            id, argv.size, argv.toTypedArray(), null, -1
                         )
-                        
-                        val map = hashMapOf<String, Any>()
-                        map["type"] = "result"
-                        map["sessionId"] = sessionId
-                        
-                        if (ret == 0) {
-                            map["code"] = 0
-                            map["message"] = "success"
-                        } else {
-                            map["code"] = ret
-                            // 获取错误信息
-                            val errorMsg = FFMpegUtils.getSessionErrorMessage(sessionId)
-                            map["message"] = if (errorMsg.isNullOrEmpty()) "FFmpeg execution failed with code: $ret" else errorMsg
-                        }
-                        
-                        // 在销毁 session 之前获取完整的错误日志（关键：必须在 destroyFFmpegSession 之前）
-                        val fullErrorLog = FFMpegUtils.getSessionErrorMessage(sessionId)
-                        map["errorLog"] = fullErrorLog ?: ""
-                        
-                        mainHandler.post {
-                            // 通过 EventChannel 发送结果事件（errorLog 已包含在 map 中）
-                            eventSink?.success(map)
-                            // 立即销毁 session（因为 errorLog 已经发送给 Dart 了）
-                            sessions.remove(sessionId)
-                            FFMpegUtils.destroyFFmpegSession(sessionId)
-                        }
-                    } catch (e: Exception) {
-                        val map = hashMapOf<String, Any>()
-                        map["type"] = "result"
-                        map["code"] = -1
-                        map["message"] = e.message ?: "Unknown error"
-                        map["sessionId"] = sessionId
-                        
-                        mainHandler.post {
-                            eventSink?.success(map)
-                            sessions.remove(sessionId)
-                            FFMpegUtils.destroyFFmpegSession(sessionId)
-                        }
+                        errorLog = FFMpegUtils.getSessionErrorMessage(id).orEmpty()
+                        message = if (code == 0) "success" else errorLog.ifEmpty { "FFmpeg failed with code $code" }
+                    } catch (error: Exception) {
+                        message = error.message ?: message
                     } finally {
-                        // 清理完成
+                        finishSession(session, code, message, errorLog)
                     }
                 }
             }
             "cancelSession" -> {
-                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
-                val sessionInfo = sessions[sessionId]
-                if (sessionInfo != null) {
-                    sessionInfo.isCancelled = true
-                    sessionInfo.future?.cancel(true)
-                    FFMpegUtils.cancelFFmpegCommandBySession(sessionId)
-                    result.success(true)
-                } else {
-                    result.success(false)
-                }
+                val id = call.argument<Number>("sessionId")?.toLong() ?: 0
+                val session = sessions[id]
+                if (session != null) cancelSession(session)
+                result.success(session != null)
             }
             "getSessionState" -> {
-                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
-                val sessionInfo = sessions[sessionId]
-                val map = hashMapOf<String, Any>()
-                if (sessionInfo != null) {
-                    map["state"] = if (sessionInfo.isCancelled) "cancelled" else "running"
-                } else {
-                    map["state"] = "not_found"
+                val session = sessions[call.argument<Number>("sessionId")?.toLong()]
+                val state = if (session == null) "not_found" else synchronized(session) {
+                    if (session.cancelled) "cancelled" else "running"
                 }
-                result.success(map)
+                result.success(mapOf("state" to state))
             }
-            "getSessionErrorMessage" -> {
-                val sessionId = (call.argument<Number>("sessionId") ?: 0).toLong()
-                val errorMsg = FFMpegUtils.getSessionErrorMessage(sessionId)
-                result.success(errorMsg)
-            }
-            "getMediaDuration" -> {
-                val mediaPath = call.arguments as String
-                result.success(FFMpegUtils.getMediaDuration(mediaPath))
+            "getSessionErrorMessage" -> result.success(FFMpegUtils.getSessionErrorMessage(
+                call.argument<Number>("sessionId")?.toLong() ?: 0
+            ))
+            "getMediaDuration", "getMediaInfo" -> {
+                val path = call.arguments as? String
+                if (path.isNullOrEmpty()) {
+                    result.error("ARGUMENT_ERROR", "A media path is required", null)
+                    return
+                }
+                // 媒体探测包含文件读取与流分析，放入工作队列避免阻塞 Flutter 主线程。
+                executor.submit {
+                    val value: Any = if (call.method == "getMediaInfo") {
+                        FFMpegUtils.getMediaInfo(path)
+                    } else FFMpegUtils.getMediaDuration(path)
+                    mainHandler.post { if (attached) result.success(value) }
+                }
             }
             "showLog" -> {
-                val show = call.argument<Boolean>("show") ?: true
-                FFMpegUtils.setLogEnabled(show)
+                FFMpegUtils.setLogEnabled(call.argument<Boolean>("show") ?: true)
                 result.success(null)
             }
-            else -> {
-                result.notImplemented()
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun cancelSession(session: SessionInfo) {
+        synchronized(session) {
+            if (session.finished) return
+            session.cancelled = true
+            if (session.started) {
+                // 原生编码协作取消，等退出后再释放，不能靠 Java 中断提前销毁 Session。
+                FFMpegUtils.cancelFFmpegCommandBySession(session.sessionId)
+            } else {
+                session.future?.cancel(false)
+                finishSession(session, -1, "Command was cancelled", "")
             }
         }
     }
 
-    override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+    private fun finishSession(session: SessionInfo, code: Int, message: String, errorLog: String) {
+        val cancelled: Boolean
+        synchronized(session) {
+            if (session.finished) return
+            session.finished = true
+            cancelled = session.cancelled
+            sessions.remove(session.sessionId)
+            FFMpegUtils.removeProgressListener(session.sessionId)
+            FFMpegUtils.destroyFFmpegSession(session.sessionId)
+        }
+        val event = mapOf<String, Any>(
+            "type" to "result", "sessionId" to session.sessionId,
+            "code" to if (cancelled) -1 else code,
+            "message" to if (cancelled) "Command was cancelled" else message,
+            "errorLog" to errorLog
+        )
+        mainHandler.post {
+            if (!attached) return@post
+            val sink = eventSink
+            if (sink != null) sink.success(event)
+            else if (pendingResults.size < 64) pendingResults[session.sessionId] = event
+        }
+    }
+
+    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        attached = false
         channel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null
-        future?.cancel(true)
-        future = null
-        
-        // 清理所有 Session
-        sessions.values.forEach { sessionInfo ->
-            sessionInfo.future?.cancel(true)
-            FFMpegUtils.destroyFFmpegSession(sessionInfo.sessionId)
-        }
-        sessions.clear()
-        
+        pendingResults.clear()
+        sessions.values.toList().forEach { cancelSession(it) }
         executor.shutdown()
     }
 
     override fun onListen(arguments: Any?, events: EventSink?) {
         eventSink = events
+        if (events != null) {
+            pendingResults.values.forEach { events.success(it) }
+            pendingResults.clear()
+        }
     }
 
     override fun onCancel(arguments: Any?) {
         eventSink = null
-        future?.cancel(true)
-        future = null
     }
 }

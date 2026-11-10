@@ -3,6 +3,8 @@ description: Demonstrates how to use the tiny_ffmpeg plugin.
 
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
+# 构建元数据用于 iOS/Android 产物标识，避免打包时版本字段缺失。
+version: 1.0.0+1
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 environment:
@@ -19,10 +21,9 @@ dependencies:
     sdk: flutter
 
  
-  audioplayers:
-    git:
-      url: https://gitcode.com/openharmony-sig/flutter_audioplayers.git
-      path: packages/audioplayers
+  # 标准 Flutter 构建使用上游包，鸿蒙分支通过独立 override 模板固定依赖。
+  audioplayers: ^6.5.1
+  path_provider: ^2.1.5
   tiny_ffmpeg:
     path: ../
 
@@ -34,12 +35,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
-dependencies_overrides:
-  path_provider:
-    git:
-      url: "https://gitcode.com/openharmony-tpc/flutter_packages.git"
-      path: "packages/path_provider/path_provider"
-
+# 文件包兼容当前三端插件依赖。
+dependency_overrides:
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your

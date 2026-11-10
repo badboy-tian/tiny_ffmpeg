@@ -48,6 +48,8 @@ class _MyAppState extends State<MyApp> {
     //printEncoderAndDecoderInfo();
 
     var args = TinyFFmpegCMD();
+    // 示例多次执行时复用输出路径，避免等待终端确认。
+    args.add("-y");
     args.add("-i");
     args.add(tempPath);
     args.add("-i");

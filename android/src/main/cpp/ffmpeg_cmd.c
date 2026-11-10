@@ -13,6 +13,8 @@
 // FFmpeg headers for getMediaDuration
 #include "libavformat/avformat.h"
 #include "libavutil/log.h"
+// 与其他平台复用相同的媒体探测规则。
+#include "tiny_media_info.h"
 
 #define LOG_TAG "tiny_ffmpeg"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -91,7 +93,7 @@ static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
     int64_t currentSessionId = g_currentSessionId;
     pthread_mutex_unlock(&g_sessionIdMutex);
     
-    LOGD("[LogCollect] shouldCollect=1, sessionId=%lld, line=%s", (long long)currentSessionId, line);
+    // 错误缓冲独立保留，关闭日志时不额外输出包含用户路径的收集调试信息。
     if (currentSessionId > 0) {
       appendSessionErrorMessage(currentSessionId, line);
       appendSessionErrorMessage(currentSessionId, "\n");
@@ -133,7 +135,6 @@ static void ffmpeg_log_callback(void *ptr, int level, const char *fmt,
 
 // 声明 ffmpeg.c 中的函数
 extern int64_t get_ffmpeg_current_session_id(void);
-extern void set_ffmpeg_current_session_id(int64_t sessionId);
 extern void cancel_ffmpeg_cmd(void);
 extern int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc,
                                        char **argv);
@@ -153,23 +154,22 @@ typedef struct {
 
 static SessionContext sessions[MAX_SESSIONS];
 static pthread_mutex_t sessionsMutex = PTHREAD_MUTEX_INITIALIZER;
+// FFmpeg 前端全局状态必须跨插件实例串行使用。
+static pthread_mutex_t executionMutex = PTHREAD_MUTEX_INITIALIZER;
 static int64_t nextSessionId = 1;
 
 // 初始化 sessions 数组
-static int sessionsInitialized = 0;
-static void initSessions() {
-  if (sessionsInitialized)
-    return;
+// 多个 Flutter Engine 首次同时使用插件时，也只能初始化一次原生锁。
+static pthread_once_t sessionsOnce = PTHREAD_ONCE_INIT;
+static void initializeSessions(void) {
   for (int i = 0; i < MAX_SESSIONS; i++) {
-    sessions[i].inUse = 0;
     pthread_mutex_init(&sessions[i].errorMutex, NULL);
   }
-  sessionsInitialized = 1;
-
-  // 初始化时设置自定义日志回调，将 FFmpeg 日志重定向到 Android logcat
   av_log_set_callback(ffmpeg_log_callback);
   av_log_set_level(AV_LOG_INFO);
-  LOGI("FFmpeg log callback initialized");
+}
+static void initSessions(void) {
+  pthread_once(&sessionsOnce, initializeSessions);
 }
 
 // 创建 FFmpeg Session
@@ -278,7 +278,10 @@ void destroyFFmpegSession(int64_t sessionId) {
 
 // 执行 FFmpeg 命令（带 Session）
 int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv) {
-  LOGI("[DEBUG] executeFFmpegCommandWithSession called, sessionId=%lld", (long long)sessionId);
+  pthread_mutex_lock(&executionMutex);
+  // -version 等命令会替换全局日志回调，每次执行都恢复 Session 错误收集。
+  av_log_set_callback(ffmpeg_log_callback);
+  av_log_set_level(AV_LOG_INFO);
   
   // 设置当前 sessionId（用于日志收集）
   pthread_mutex_lock(&g_sessionIdMutex);
@@ -294,7 +297,7 @@ int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv) {
       pthread_mutex_lock(&sessions[i].errorMutex);
       sessions[i].errorBuffer[0] = '\0';
       sessions[i].errorBufferLen = 0;
-      sessions[i].cancelled = 0;
+      // 取消状态由创建 Session 初始化，执行时不能覆盖排队取消。
       pthread_mutex_unlock(&sessions[i].errorMutex);
       break;
     }
@@ -308,10 +311,36 @@ int executeFFmpegCommandWithSession(int64_t sessionId, int argc, char **argv) {
   g_currentSessionId = 0;
   pthread_mutex_unlock(&g_sessionIdMutex);
 
+  pthread_mutex_unlock(&executionMutex);
   return ret;
 }
 
 // ==================== JNI 接口 ====================
+
+// print_report 在调用 JNI 的执行线程中运行，局部引用仅在本次执行期间有效。
+static _Thread_local JNIEnv *progressEnv;
+static _Thread_local jclass progressClass;
+static _Thread_local jmethodID progressMethod;
+void tiny_ffmpeg_report_progress(int64_t id, int64_t time, int64_t size, double speed)
+{
+  if (progressEnv && progressMethod) {
+    (*progressEnv)->CallStaticVoidMethod(progressEnv, progressClass, progressMethod,
+        (jlong)id, (jlong)(time / 1000), (jlong)size, (jdouble)speed);
+    if ((*progressEnv)->ExceptionCheck(progressEnv)) (*progressEnv)->ExceptionClear(progressEnv);
+  }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_getMediaInfo(JNIEnv *env, jclass clazz, jstring mediaPath)
+{
+  if (!mediaPath) return (*env)->NewStringUTF(env, "{\"error\":-22}");
+  const char *path = (*env)->GetStringUTFChars(env, mediaPath, NULL);
+  if (!path) return NULL;
+  char json[2048];
+  tiny_media_info(path, json, sizeof(json));
+  (*env)->ReleaseStringUTFChars(env, mediaPath, path);
+  return (*env)->NewStringUTF(env, json);
+}
 
 JNIEXPORT jlong JNICALL
 Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_createFFmpegSession(JNIEnv *env,
@@ -324,19 +353,36 @@ Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_executeFFmpegCommandWithSession(
     JNIEnv *env, jclass clazz, jlong sessionId, jint argc, jobjectArray argv,
     jobject listener, jlong totalTime) {
 
-  // 转换 Java String 数组到 C char** 数组
-  char **argvC = (char **)malloc(argc * sizeof(char *));
+  // FFmpeg 会读取 argv[argc]，必须提供空指针哨兵，避免 Release 构建越界读取。
+  if (!argv || argc <= 0 || argc != (*env)->GetArrayLength(env, argv))
+    return AVERROR(EINVAL);
+  char **argvC = (char **)calloc((size_t)argc + 1, sizeof(char *));
+  if (!argvC) return AVERROR(ENOMEM);
+  int ret = AVERROR(ENOMEM);
   for (int i = 0; i < argc; i++) {
     jstring str = (jstring)(*env)->GetObjectArrayElement(env, argv, i);
+    if (!str) goto free_arguments;
     const char *cStr = (*env)->GetStringUTFChars(env, str, NULL);
+    if (!cStr) {
+      (*env)->DeleteLocalRef(env, str);
+      goto free_arguments;
+    }
     argvC[i] = strdup(cStr);
     (*env)->ReleaseStringUTFChars(env, str, cStr);
     (*env)->DeleteLocalRef(env, str);
+    if (!argvC[i]) goto free_arguments;
   }
 
-  int ret = executeFFmpegCommandWithSession(sessionId, argc, argvC);
+  progressEnv = env;
+  progressClass = clazz;
+  progressMethod = (*env)->GetStaticMethodID(env, clazz, "onNativeProgress", "(JJJD)V");
+  ret = executeFFmpegCommandWithSession(sessionId, argc, argvC);
+  progressEnv = NULL;
+  progressClass = NULL;
+  progressMethod = NULL;
 
-  // 释放内存
+  // calloc 保证部分分配失败时也能释放所有已创建的字符串。
+free_arguments:
   for (int i = 0; i < argc; i++) {
     free(argvC[i]);
   }
@@ -378,36 +424,9 @@ Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_getMediaDuration(JNIEnv *env,
     return -1;
   }
 
-  jlong duration = -1;
-  AVFormatContext *formatContext = NULL;
-
-  // 打开媒体文件
-  int ret = avformat_open_input(&formatContext, path, NULL, NULL);
-  if (ret < 0) {
-    LOGE("getMediaDuration: avformat_open_input failed for %s, error: %d", path,
-         ret);
-    (*env)->ReleaseStringUTFChars(env, mediaPath, path);
-    return -1;
-  }
-
-  // 获取流信息
-  ret = avformat_find_stream_info(formatContext, NULL);
-  if (ret < 0) {
-    LOGE("getMediaDuration: avformat_find_stream_info failed, error: %d", ret);
-    avformat_close_input(&formatContext);
-    (*env)->ReleaseStringUTFChars(env, mediaPath, path);
-    return -1;
-  }
-
-  // 获取时长（单位：微秒），转换为毫秒
-  if (formatContext->duration != AV_NOPTS_VALUE) {
-    duration = formatContext->duration / 1000; // 微秒转毫秒
-  }
-
-  // 清理
-  avformat_close_input(&formatContext);
+  // 三端共用轻量探测，文件损坏和未知时长均返回 -1。
+  jlong duration = tiny_media_duration(path);
   (*env)->ReleaseStringUTFChars(env, mediaPath, path);
-
   return duration;
 }
 
@@ -420,12 +439,6 @@ JNIEXPORT void JNICALL Java_com_i7play_tiny_1ffmpeg_FFMpegUtils_setLogEnabled(
   g_logEnabled = enabled ? 1 : 0;
   pthread_mutex_unlock(&g_logMutex);
 
-  // 设置 FFmpeg 日志级别
-  if (enabled) {
-    av_log_set_level(AV_LOG_INFO);
-  } else {
-    av_log_set_level(AV_LOG_QUIET);
-  }
-
-  LOGI("setLogEnabled: %s", enabled ? "true" : "false");
+  // 关闭控制台输出仍要收集错误，避免失败结果只剩下一个返回码。
+  av_log_set_level(AV_LOG_INFO);
 }
