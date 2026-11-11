@@ -1,0 +1,77 @@
+[
+  {
+    "file": "android/src/main/cpp/arm64-v8a/libffmpeg.so",
+    "bytes": 13293000,
+    "sha256": "e1f88f696fa7cd4df5ffac59f38bdf6d3dc5fef438326081cea0159724729d53"
+  },
+  {
+    "file": "ios/Classes/lib/libavcodec.a",
+    "bytes": 5078360,
+    "sha256": "858dcb65f2e545c9849ec9e01e720873b80c01530deaa385de68eafa072d9c7f"
+  },
+  {
+    "file": "ios/Classes/lib/libavdevice.a",
+    "bytes": 59648,
+    "sha256": "266f19ff4da46e59598e9b75a884a65a3d045e41d6f3789728c1401ddc190156"
+  },
+  {
+    "file": "ios/Classes/lib/libavfilter.a",
+    "bytes": 778792,
+    "sha256": "37305a148d4dcabc28f6b8ac90d2fa2f4c5c3ea6846e81f2fc467c6cfbc7a15d"
+  },
+  {
+    "file": "ios/Classes/lib/libavformat.a",
+    "bytes": 1531984,
+    "sha256": "546e97679129ab0a41f1e281cd7b2d930b289d192ffe33fee4805d4461ddaa52"
+  },
+  {
+    "file": "ios/Classes/lib/libavutil.a",
+    "bytes": 874808,
+    "sha256": "2052b46a1ec6c3611ea1975291c2195934be55b99ba7a49e144948f083c709a6"
+  },
+  {
+    "file": "ios/Classes/lib/libswresample.a",
+    "bytes": 111968,
+    "sha256": "600d0f14f291528ac477c7f24169c3c79572a761e60649a8ddfb5a006209b218"
+  },
+  {
+    "file": "ios/Classes/lib/libswscale.a",
+    "bytes": 1015856,
+    "sha256": "5124bc37915f8936bc81f4c158098cf433e1ffb02ed8f656b9bcb7f62ffad78f"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libavcodec.a",
+    "bytes": 4227932,
+    "sha256": "6eafc0629e8d7e607f39b5d8fc1fb8a8fdd0b7ef110fe22b9d9e813aee35d5f2"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libavdevice.a",
+    "bytes": 90808,
+    "sha256": "2a86b82193fd4b7f8af5add138d1aa152a297fd9227933cd43dc105fd7f74653"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libavfilter.a",
+    "bytes": 808658,
+    "sha256": "21dc2ce50e843984dcda679e478dcfa9a0e00a3937509ee370e23ea3d2b27862"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libavformat.a",
+    "bytes": 1593128,
+    "sha256": "fade5e6e35739ce2630f583f23fe23e251a3380649c99ea3a9350869c0525895"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libavutil.a",
+    "bytes": 884622,
+    "sha256": "4c976c0f407df72cfc8132097c1dabcec8ff521b7e70f1a5fb319e6e33e42468"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libswresample.a",
+    "bytes": 121134,
+    "sha256": "72c5bf58da541aca750a507008a139021a52f0a4a82b8e8e7657cc5e5fe4149b"
+  },
+  {
+    "file": "ohos/src/main/cpp/thirdparty/FFmpeg/arm64-v8a/lib/libswscale.a",
+    "bytes": 1032564,
+    "sha256": "6e7a298bf0dff5cf32a02dfbe2f08e7dd0545a83313881038515669932cc6548"
+  }
+]

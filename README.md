@@ -52,6 +52,9 @@ pod install
 
 ## 保留源视频的 HDR 和画质
 
+<!-- 三端都必须分发真实滤镜实现，否则相同 SDR 命令会在某个平台运行失败。 -->
+Android / iOS / HarmonyOS 库均包含 `zscale`、`tonemap` 和 `sidedata`。宿主明确选择 HDR 转 SDR 时，应先完成实际像素映射，再以 `sidedata=mode=delete` 删除失效的 HDR 帧附加信息，并使用 BT.709 编码标签；只改标签或 `-map_metadata -1` 不能代替转换。
+
 ```dart
 import 'package:tiny_ffmpeg/tiny_ffmpeg.dart';
 
@@ -76,7 +79,7 @@ final result = await session.getResult();
 
 动态 HDR 类型通过流信息和首个解码帧识别。统一入口支持 HDR Vivid、HDR10+ 和单层 Dolby Vision Profile 5、8。HDR Vivid、HDR10+ 的 T.35 参数随对应帧写回，Dolby Vision 按帧编码 RPU 并生成 MP4 配置记录。已识别的双层增强层以及其他 Dolby Vision profile 会返回 UnsupportedError，防止丢弃增强层画面。
 
-crop 坐标按显示旋转后的画面计算，并要求偶数边界。输出为 MP4，音频使用 copy。动态 HDR 的亮度统计、映射曲线和区域描述沿用源帧，没有针对裁剪区域重新分析。异常或取消后调用方应清理未完成的输出文件。无损编码保留解码像素，Dolby Vision 的流级 level 会由编码器按输出规格重新计算。
+crop 坐标按显示旋转后的画面计算，并要求偶数边界。输出为 MP4，已确认全部为 AAC 的音轨使用 copy，其他音轨编码为 AAC，避免不兼容的源音频导致导出失败。动态 HDR 的亮度统计、映射曲线和区域描述沿用源帧，没有针对裁剪区域重新分析。异常或取消后调用方应清理未完成的输出文件。无损编码保留解码像素，Dolby Vision 的流级 level 会由编码器按输出规格重新计算。
 
 进度订阅与 Session 结果共用原生事件通道。progress 事件包含 sessionId、time、size、speed，time 使用毫秒，size 使用字节，speed 为处理速度倍数。关闭日志后进度和错误结果仍可获取。取消任务会完成已等待的 getResult，原生资源在执行线程安全退出后释放。
 
@@ -115,6 +118,15 @@ flutter build apk --debug --target-platform android-arm64 -t test_driver/commerc
 宿主测试设置 NO_PROXY=localhost,127.0.0.1,::1 可避免本地 HTTP 代理影响 Flutter 测试运行器的连接。
 
 example/test_driver/dynamic_hdr_device.dart 覆盖 Dolby Vision 8.4、5、8.1 和 HDR10+ 元数据版本 0、1 的默认无损剪辑、默认无损 crop、有损 crop，核对输出 profile、位深、色彩信息和关闭日志后的进度。输入分别命名为 dovi.mp4、dovi5.mp4、dovi81.mp4、hdr10plus.mp4、hdr10plus0.mp4，放入应用 documents 目录。8.4 使用真实手机素材，5 和 8.1 使用带独立 RPU 的合成测试素材。主机侧另外逐帧核对 RPU 语义、HDR10+ 原始 T.35 数据和无损解码像素，不能只依赖文件上的 HDR 标记。
+
+<!-- 原生库更新后需要真实执行映射和清理，符号存在不能代替设备回归。 -->
+`example/test_driver/color_parity_device.dart` 在三端运行相同的 12 项导出：HLG、HDR Vivid、Dolby Vision、HDR10+ 各自执行高质量剪辑、crop、HDR 转 SDR。输入放入 documents 的 `parity-input/`，命名为 `hlg.mp4`、`vivid.mp4`、`dovi.mp4`、`hdr10plus.mp4`；也可复用 documents 根目录中的同名素材。将生成的 `parity-output/` 拉回主机后执行：
+
+```bash
+python3 tools/check-color-exports.py /path/to/parity-output
+```
+
+检查覆盖完整解码、递增时间戳、实际位深及色彩参数、HDR 输出逐帧动态元数据，以及 SDR 输出没有静态/动态 HDR 残留。三端实测结果及范围见 [验收记录](doc/reviews/三端原生库与色彩导出验收-2026-11-11.md)。
 
 <!-- 音轨探测兼容旧原生版本，不能从缺省字段推断可以直拷。 -->
 `getMediaInfo()` 返回 `audioStreams`（每项含绝对 `index` 与 `codec`）。

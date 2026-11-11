@@ -4,7 +4,8 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'tiny_ffmpeg'
-  s.version          = '0.0.5'
+  # 与 Dart 分发版本一致，使 CocoaPods 能识别此次原生产物更新。
+  s.version          = '0.0.13'
   s.summary          = 'A new Flutter project.'
   s.description      = <<-DESC
 A new Flutter project.
