@@ -47,6 +47,8 @@ target_link_libraries(ffmpegutils PUBLIC
     libnative_media_codecbase.so 
     libnative_media_core.so 
     libnative_media_vdec.so 
+    # NativeImage让HDR解码Surface在GPU完成709映射后再交给编码Surface。
+    libnative_image.so
     libnative_window.so
     libnative_media_venc.so 
     libnative_media_acodec.so 

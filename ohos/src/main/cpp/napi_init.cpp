@@ -32,6 +32,9 @@ void cancel_ffmpeg_cmd(void);
 int exe_ffmpeg_cmd_with_session(int64_t sessionId, int argc, char **argv);
 }
 
+// 能力查询也在AKI工作线程完成，避免打开视频时阻塞界面。
+#include "ohcodec_capability.h"
+
 char **vector_to_argv(const std::vector<std::string> &args) {
   // Calculate the number of arguments (argc)
   int argc = args.size();
@@ -328,6 +331,9 @@ extern "C" void tiny_ffmpeg_report_progress(int64_t id, int64_t time, int64_t si
   if (callback) callback->Invoke<void>((double)(time / 1000), (double)size, speed);
 }
 
+// HDR任务复用现有Session锁、取消与进度回调，不能另起失控工作线程。
+#include "hdr_surface_session.h"
+
 // 时长查询无需解码首帧，兼容音频文件和仅可探测的输入格式。
 int64_t getMediaDuration(std::string path) {
   return tiny_media_duration(path.c_str());
@@ -386,7 +392,14 @@ int executeFFmpegCommandWithSession(int64_t sessionId, std::string uuid,
   // 设置全局日志回调（FFmpeg 的日志回调是全局的，但我们在回调中通过 sessionId 查找对应的 CallBackInfo）
   av_log_set_callback(log_call_back_with_callback);
 
-  int ret = exe_ffmpeg_cmd_with_session(sessionId, cmdLen, argv1);
+  // 自定义Surface任务也需要真实线程会话号，错误日志和取消才能归属当前任务。
+  const bool hdrSurface = argv.size() > 1 && (argv[1] == "-tiny_hdr_surface_v1" || argv[1] == "-tiny_sdr_gpu_v1");
+  int ret;
+  if (hdrSurface) {
+    set_ffmpeg_current_session_id(sessionId);
+    ret = executeHdrSurface(sessionId, argv);
+    set_ffmpeg_current_session_id(0);
+  } else ret = exe_ffmpeg_cmd_with_session(sessionId, cmdLen, argv1);
 
   setCurrentExecutingSessionId(0);
 
@@ -463,5 +476,9 @@ JSBIND_GLOBAL() {
   JSBIND_FUNCTION(setLogEnabled);
   JSBIND_FUNCTION(releaseFFmpegCallback);
   JSBIND_PFUNCTION(getMediaInfo);
+  JSBIND_PFUNCTION(getOhosVideoEncoder);
+  JSBIND_FUNCTION(getOhosHdrSurfaceVersion);
+  // GPU协议单独声明能力，旧Dart仍按原HDR路径工作。
+  JSBIND_FUNCTION(getOhosSdrGpuVersion);
   JSBIND_PFUNCTION(getMediaDuration);
 }

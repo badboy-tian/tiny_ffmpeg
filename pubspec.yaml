@@ -1,7 +1,7 @@
 name: tiny_ffmpeg
 description: A new Flutter project.
-# 原生产物更新后提升版本，避免宿主继续复用旧版插件构建缓存。
-version: 0.0.13
+# OHOS硬编修复更新产物版本，避免宿主命中旧的原生构建缓存。
+version: 0.0.14
 homepage: https://github.com/badboy-tian
 
 environment:

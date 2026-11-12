@@ -188,6 +188,22 @@ export default class TinyFfmpegPlugin implements FlutterPlugin, MethodCallHandle
           result.success(json);
         }).catch((error: Error) => result.error("MEDIA_ERROR", error.message, null));
         break;
+      // 旧插件不具备该协议时，Dart会保持软件路径，不能把自定义命令送给FFmpeg。
+      // SDR GPU能力与HDR保留协议独立，避免新Dart误用旧原生。
+      case "getOhosSdrGpuVersion":
+        result.success(ffmpegutils.getOhosSdrGpuVersion());
+        break;
+      case "getOhosHdrSurfaceVersion":
+        result.success(ffmpegutils.getOhosHdrSurfaceVersion());
+        break;
+      case "getOhosVideoEncoder":
+        // 查询失败只表示不可用，由Dart继续软件编码，不在原生偷偷回退。
+        ffmpegutils.getOhosVideoEncoder(call.argument("input") as string,
+          call.argument("streamIndex") as number, call.argument("width") as number,
+          call.argument("height") as number, call.argument("speed") as number,
+          call.argument("bitrate") as number).then((json: string) => result.success(json))
+          .catch((error: Error) => result.error("CAPABILITY_ERROR", error.message, null));
+        break;
       case "showLog":
         const show = (call.argument("show") as boolean) ?? true;
         ffmpegutils.setLogEnabled(show);
